@@ -8,399 +8,540 @@ import (
 	"strings"
 )
 
-// App holds all application state
-type App struct {
-	projects      []models.Project
-	project       *models.Project
-	shapes        []models.Shape
-	cursorX       int
-	cursorY       int
-	drawChar      rune
-	fillMode      bool
-	selectedShape models.ShapeType
-	screen        Screen
-
-	// For drawing — first point already placed
-	drawing   bool
-	startX    int
-	startY    int
-
-	// terminal size (detected or default)
-	termW int
-	termH int
-
-	// message shown in status bar
-	statusMsg string
-
-	// input text buffer (for name entry etc.)
-	inputBuf string
-}
+// ── Screen enum ─────────────────────────────────────────────────────────────
 
 type Screen int
 
 const (
-	ScreenProjects Screen = iota
-	ScreenCanvas
-	ScreenNewProject
-	ScreenShapeMenu
-	ScreenHelp
+	ScrProjects Screen = iota
+	ScrCanvas
+	ScrNewProject
+	ScrShapeMenu
+	ScrHelp
 )
 
-func NewApp() *App {
+// ── App state ────────────────────────────────────────────────────────────────
+
+type App struct {
+	// data
+	projects []models.Project
+	project  *models.Project
+	shapes   []models.Shape
+
+	// current screen
+	screen Screen
+
+	// canvas cursor position
+	cx, cy int
+
+	// drawing state
+	drawing        bool
+	startX, startY int
+
+	// shape options
+	shapeType models.ShapeType
+	fillMode  bool
+	drawChar  rune
+	drawColor models.ColorName
+
+	// shape menu cursor
+	menuCursor int // 0=type, 1=fill, 2=char, 3=color
+
+	// project list cursor
+	projCursor int
+
+	// text input buffer (new project name)
+	inputBuf string
+
+	// one-line status message shown on canvas
+	status string
+
+	// canvas screen offset — where on screen the canvas top-left is drawn
+	// set once and never changes: fixes the no-scroll requirement
+	canvasOffX int // column of the left │ border
+	canvasOffY int // row of the ┌ border
+
+	// layout constants (computed once)
+	sideW  int // width of right sidebar
+	headerH int // rows used above the canvas border
+	footerH int // rows used below the canvas border
+}
+
+func newApp() *App {
 	return &App{
-		drawChar:      '*',
-		fillMode:      false,
-		selectedShape: models.ShapeRect,
-		screen:        ScreenProjects,
-		termW:         120,
-		termH:         40,
-		cursorX:       10,
-		cursorY:       10,
+		screen:    ScrProjects,
+		shapeType: models.ShapeRect,
+		fillMode:  false,
+		drawChar:  '*',
+		drawColor: models.ColorGreen,
+		sideW:     28,
+		headerH:   3, // row1=header bar, row2=keybind bar, row3=border top
+		footerH:   3, // border bottom + ruler + status
 	}
 }
 
-// Run is the main loop
+// ── Entry point ──────────────────────────────────────────────────────────────
+
 func Run() {
 	InitTerminal()
 	HideCursor()
+	ClearScreen()
+	Flush()
 
-	app := NewApp()
+	app := newApp()
 	db.Connect()
 	app.loadProjects()
 
-	// Cleanup on exit
 	defer func() {
+		// restore terminal cleanly
+		MoveTo(1, 1)
+		ClearScreen()
 		ShowCursor()
-		Clear()
+		EraseDown()
 		Flush()
 		restoreTerminal()
 	}()
 
 	initRawMode()
 
+	// Draw once, then enter event loop
+	app.draw()
 	for {
-		app.render()
 		key := ReadKey()
 		if !app.handleKey(key) {
-			return // quit
+			return
 		}
+		app.draw()
 	}
 }
 
-// ---------- rendering ----------
+// ── Top-level draw dispatcher ─────────────────────────────────────────────────
 
-func (a *App) render() {
+func (a *App) draw() {
 	switch a.screen {
-	case ScreenProjects:
-		a.renderProjectList()
-	case ScreenCanvas:
-		a.renderCanvas()
-	case ScreenNewProject:
-		a.renderNewProject()
-	case ScreenShapeMenu:
-		a.renderShapeMenu()
-	case ScreenHelp:
-		a.renderHelp()
+	case ScrProjects:
+		a.drawProjectList()
+	case ScrCanvas:
+		a.drawCanvas()
+	case ScrNewProject:
+		a.drawNewProject()
+	case ScrShapeMenu:
+		a.drawShapeMenu()
+	case ScrHelp:
+		a.drawHelp()
 	}
 	Flush()
 }
 
-func (a *App) renderProjectList() {
-	Clear()
-	// Header
-	PrintAt(1, 1, BgBlue+BrightWhite+Bold+" ASCII CANVAS STUDIO "+Reset+
-		Dim+"  v1.0  |  Interactive Terminal Drawing"+Reset)
-	PrintAt(1, 2, Dim+strings.Repeat("─", 60)+Reset)
+// ── Project list screen ───────────────────────────────────────────────────────
 
-	PrintAt(1, 4, Bold+White+"  Projects"+Reset)
-	PrintAt(1, 5, Dim+"  ──────────────────────────────"+Reset)
+func (a *App) drawProjectList() {
+	// Paint from top-left — no clearing needed, we overwrite every line
+	MoveTo(1, 1)
+
+	line := func(s string) { Print(s + "\033[K\n") } // \033[K clears to EOL
+
+	line(BgBlue + FgBrightWhite + Bold + "  ASCII CANVAS STUDIO  " + Reset +
+		Dim + "  Terminal Drawing App  |  Q=quit" + Reset)
+	line(Dim + Repeat("─", 60) + Reset)
+	line("")
+	line(Bold + FgBrightWhite + "  Projects" + Reset)
+	line(Dim + "  " + Repeat("─", 40) + Reset)
 
 	if len(a.projects) == 0 {
-		PrintAt(3, 7, Dim+"  No projects yet. Press "+Reset+Yellow+"N"+Reset+Dim+" to create one."+Reset)
+		line(Dim + "  No projects yet." + Reset)
+		line(Dim + "  Press " + Reset + FgBrightYellow + "N" + Reset + Dim + " to create one." + Reset)
 	} else {
 		for i, p := range a.projects {
-			prefix := "  "
-			style := ""
-			if i == a.cursorY {
-				prefix = BgBlue + BrightWhite + " ▶"
-				style = BgBlue + BrightWhite
+			if i == a.projCursor {
+				line(BgBlue + FgBrightWhite + fmt.Sprintf("  ▶  %-22s  %dx%d", p.Name, p.Width, p.Height) + Reset)
+			} else {
+				line(fmt.Sprintf("     %-22s  "+Dim+"%dx%d"+Reset, p.Name, p.Width, p.Height))
 			}
-			PrintAtf(1, 7+i, "%s%-3d  %-20s  %dx%d  (%d shapes)%s",
-				prefix+style, i+1, p.Name, p.Width, p.Height, len(p.Shapes), Reset)
 		}
 	}
 
-	row := 9 + len(a.projects)
-	PrintAt(1, row, Dim+strings.Repeat("─", 60)+Reset)
-	row++
-	PrintAt(1, row, "  "+Yellow+"N"+Reset+" New project   "+
-		Yellow+"Enter"+Reset+" Open   "+
-		Yellow+"D"+Reset+" Delete   "+
-		Yellow+"Q"+Reset+" Quit")
-
-	if a.statusMsg != "" {
-		PrintAt(1, row+2, BrightGreen+"  "+a.statusMsg+Reset)
-	}
+	line("")
+	line(Dim + Repeat("─", 60) + Reset)
+	line("  " + FgBrightYellow + "↑↓" + Reset + " navigate   " +
+		FgBrightYellow + "Enter" + Reset + " open   " +
+		FgBrightYellow + "N" + Reset + " new   " +
+		FgBrightYellow + "D" + Reset + " delete   " +
+		FgBrightYellow + "Q" + Reset + " quit")
+	// Erase anything below
+	EraseDown()
 }
 
-func (a *App) renderNewProject() {
-	Clear()
-	PrintAt(1, 1, BgBlue+BrightWhite+Bold+" NEW PROJECT "+Reset)
-	PrintAt(1, 3, "  Project name: "+BrightGreen+a.inputBuf+BrightYellow+"█"+Reset)
-	PrintAt(1, 5, Dim+"  Type a name and press "+Reset+Yellow+"Enter"+Reset+Dim+" to create"+Reset)
-	PrintAt(1, 6, Dim+"  Press "+Reset+Yellow+"Esc"+Reset+Dim+" to cancel"+Reset)
-	Flush()
+// ── New project screen ────────────────────────────────────────────────────────
+
+func (a *App) drawNewProject() {
+	MoveTo(1, 1)
+	line := func(s string) { Print(s + "\033[K\n") }
+	line(BgBlue + FgBrightWhite + Bold + "  NEW PROJECT  " + Reset)
+	line("")
+	line("  Name: " + FgBrightGreen + a.inputBuf + FgBrightYellow + "█" + Reset)
+	line("")
+	line(Dim + "  Type name → Enter to create   Esc to cancel" + Reset)
+	EraseDown()
 }
 
-func (a *App) renderShapeMenu() {
-	if a.project == nil {
-		a.screen = ScreenProjects
-		return
-	}
-	Clear()
-	PrintAt(1, 1, BgBlue+BrightWhite+Bold+" SHAPE MENU "+Reset+
-		Dim+"  project: "+Reset+BrightCyan+a.project.Name+Reset)
-	PrintAt(1, 2, Dim+strings.Repeat("─", 50)+Reset)
+// ── Shape menu screen ─────────────────────────────────────────────────────────
 
-	items := []struct{ key, label string }{
-		{"1", "Rectangle"},
-		{"2", "Circle"},
-		{"3", "Line"},
+func (a *App) drawShapeMenu() {
+	MoveTo(1, 1)
+	line := func(s string) { Print(s + "\033[K\n") }
+
+	line(BgBlue + FgBrightWhite + Bold + "  SHAPE OPTIONS  " + Reset +
+		Dim + "  Enter/Esc = back to canvas" + Reset)
+	line(Dim + Repeat("─", 50) + Reset)
+	line("")
+
+	// Shape type
+	shapes := []struct {
+		key   string
+		stype models.ShapeType
+		label string
+		icon  string
+	}{
+		{"1", models.ShapeRect, "Rectangle", "▭"},
+		{"2", models.ShapeCircle, "Circle", "◯"},
+		{"3", models.ShapeLine, "Line", "╱"},
 	}
-	PrintAt(3, 4, Bold+"Shape type:"+Reset)
-	for _, item := range items {
-		mark := "  "
-		col := White
-		if (item.key == "1" && a.selectedShape == models.ShapeRect) ||
-			(item.key == "2" && a.selectedShape == models.ShapeCircle) ||
-			(item.key == "3" && a.selectedShape == models.ShapeLine) {
-			mark = BrightGreen + "▶ " + Reset + BrightGreen
-			col = BrightGreen
+	line(Bold + "  Shape Type" + Reset + Dim + "  (press number key)" + Reset)
+	for _, s := range shapes {
+		sel := a.shapeType == s.stype
+		if sel {
+			line(FgBrightGreen + "  ▶ [" + s.key + "] " + s.icon + " " + s.label + Reset)
+		} else {
+			line(Dim + "    [" + s.key + "] " + s.icon + " " + s.label + Reset)
 		}
-		row := 5
-		if item.key == "2" { row = 6 }
-		if item.key == "3" { row = 7 }
-		PrintAtf(3, row, "%s%s%s"+Reset, mark, col, item.label)
 	}
+	line("")
 
-	PrintAt(3, 9, Bold+"Fill mode:"+Reset)
-	fillOff := White + "  ○ Outline"
-	fillOn  := White + "  ○ Filled"
+	// Fill mode
+	line(Bold + "  Fill Mode" + Reset + Dim + "  (press F to toggle)" + Reset)
 	if !a.fillMode {
-		fillOff = BrightGreen + "  ● Outline" + Reset
+		line(FgBrightCyan + "  ▶ [□] Outline" + Reset)
+		line(Dim + "    [■] Filled" + Reset)
 	} else {
-		fillOn = BrightGreen + "  ● Filled" + Reset
+		line(Dim + "    [□] Outline" + Reset)
+		line(FgBrightCyan + "  ▶ [■] Filled" + Reset)
 	}
-	PrintAt(3, 10, fillOff+Reset)
-	PrintAt(3, 11, fillOn+Reset)
+	line("")
 
-	PrintAt(3, 13, Bold+"Draw character:"+Reset+"  "+BrightYellow+Bold+string(a.drawChar)+Reset)
+	// Draw character
+	line(Bold + "  Draw Char" + Reset + Dim + "  (press C, type new char)" + Reset)
+	presets := []rune{'*', '#', '@', '+', 'X', 'O', '.', '=', '~', '%', '&', '$'}
+	charRow := "  "
+	for _, ch := range presets {
+		if rune(a.drawChar) == ch {
+			charRow += FgBrightYellow + "[" + string(ch) + "]" + Reset + " "
+		} else {
+			charRow += Dim + " " + string(ch) + " " + Reset + " "
+		}
+	}
+	line(charRow)
+	line("  Current: " + FgBrightYellow + Bold + string(a.drawChar) + Reset +
+		"   Press " + FgBrightYellow + "C" + Reset + " then type any character")
+	line("")
 
-	PrintAt(1, 15, Dim+strings.Repeat("─", 50)+Reset)
-	PrintAt(3, 16, Yellow+"1/2/3"+Reset+" shape   "+
-		Yellow+"F"+Reset+" toggle fill   "+
-		Yellow+"C"+Reset+" change char")
-	PrintAt(3, 17, Yellow+"Enter"+Reset+" / "+Yellow+"Space"+Reset+" → draw on canvas   "+
-		Yellow+"Esc"+Reset+" back")
+	// Color picker
+	line(Bold + "  Color" + Reset + Dim + "  (press ← → to change)" + Reset)
+	colorRow := "  "
+	for _, c := range models.AllColors {
+		if c == a.drawColor {
+			colorRow += ColorANSI(c) + Bold + "[" + string(c)[0:1] + "]" + Reset + " "
+		} else {
+			colorRow += Dim + ColorANSI(c) + " " + string(c)[0:1] + " " + Reset + " "
+		}
+	}
+	line(colorRow)
+	line("  Selected: " + ColorANSI(a.drawColor) + Bold + string(a.drawColor) + Reset)
+
+	line("")
+	line(Dim + Repeat("─", 50) + Reset)
+	line("  " + FgBrightYellow + "1/2/3" + Reset + " shape   " +
+		FgBrightYellow + "F" + Reset + " fill   " +
+		FgBrightYellow + "C" + Reset + " char   " +
+		FgBrightYellow + "←→" + Reset + " color   " +
+		FgBrightYellow + "Enter" + Reset + " draw")
+	EraseDown()
 }
 
-func (a *App) renderHelp() {
-	Clear()
-	PrintAt(1, 1, BgBlue+BrightWhite+Bold+" HELP "+Reset)
-	lines := []string{
+// ── Help screen ───────────────────────────────────────────────────────────────
+
+func (a *App) drawHelp() {
+	MoveTo(1, 1)
+	line := func(s string) { Print(s + "\033[K\n") }
+	line(BgBlue + FgBrightWhite + Bold + "  HELP  " + Reset)
+	helps := []string{
 		"",
-		Bold + "  CANVAS CONTROLS" + Reset,
-		"  " + Yellow + "Arrow keys" + Reset + "        Move cursor",
-		"  " + Yellow + "Shift+Arrows" + Reset + "      Move cursor faster (×5)",
-		"  " + Yellow + "Space / Enter" + Reset + "     Place point (first=start, second=draw)",
-		"  " + Yellow + "Esc" + Reset + "               Cancel drawing / Go back",
-		"  " + Yellow + "S" + Reset + "                 Open shape/fill/char menu",
-		"  " + Yellow + "U" + Reset + "                 Undo last shape",
-		"  " + Yellow + "X" + Reset + "                 Clear entire canvas",
-		"  " + Yellow + "H" + Reset + "                 This help screen",
-		"  " + Yellow + "Q" + Reset + "                 Quit to project list",
+		Bold + "  CONTROLS" + Reset,
+		"  " + FgBrightYellow + "↑ ↓ ← →" + Reset + "     Move cursor on canvas",
+		"  " + FgBrightYellow + "Space/Enter" + Reset + "  Place point (1st=start, 2nd=draw shape)",
+		"  " + FgBrightYellow + "S" + Reset + "           Shape/fill/char/color menu",
+		"  " + FgBrightYellow + "U" + Reset + "           Undo last shape",
+		"  " + FgBrightYellow + "X" + Reset + "           Clear canvas",
+		"  " + FgBrightYellow + "H" + Reset + "           This help screen",
+		"  " + FgBrightYellow + "Q" + Reset + "           Back to project list",
+		"  " + FgBrightYellow + "Esc" + Reset + "         Cancel drawing",
 		"",
-		Bold + "  DRAWING WORKFLOW" + Reset,
-		"  1. Press " + Yellow + "S" + Reset + " to pick shape, fill mode, and character",
-		"  2. Move cursor with arrow keys to start position",
-		"  3. Press " + Yellow + "Space" + Reset + " to place start point",
-		"  4. Move cursor to end position (live preview shown)",
-		"  5. Press " + Yellow + "Space" + Reset + " again to draw the shape",
+		Bold + "  DRAWING" + Reset,
+		"  1. Press S → choose shape, fill, character, color",
+		"  2. Move cursor to start position",
+		"  3. Press Space → start point locked (yellow cursor)",
+		"  4. Move cursor → live preview of shape follows",
+		"  5. Press Space again → shape committed to canvas",
 		"",
-		Bold + "  SHAPES" + Reset,
-		"  Rectangle  x1,y1 → x2,y2 corner",
-		"  Circle     center x,y + radius (move away from center)",
-		"  Line       x1,y1 → x2,y2 endpoint",
+		Bold + "  CIRCLE" + Reset,
+		"  Start = center, move cursor outward = radius",
 		"",
 		"  Press any key to return...",
 	}
-	for i, l := range lines {
-		PrintAt(1, 2+i, l)
+	for _, h := range helps {
+		line(h)
 	}
+	EraseDown()
 }
 
-func (a *App) renderCanvas() {
+// ── Canvas screen — the main drawing area ─────────────────────────────────────
+//
+// Layout (fixed, never scrolls):
+//
+//   Row 1:   [header bar]
+//   Row 2:   [keybind/status bar]
+//   Row 3:   ┌────────── canvas ──────────┐   [sidebar top]
+//   Row 4..N │  . . . cells . . .         │   [sidebar rows]
+//   Row N+1: └────────────────────────────┘   [sidebar bottom]
+//   Row N+2: [x-axis ruler]
+//   Row N+3: [status message]
+//
+// The canvas border is always at the same screen rows — no scroll possible.
+
+func (a *App) drawCanvas() {
 	if a.project == nil {
-		a.screen = ScreenProjects
+		a.screen = ScrProjects
 		return
 	}
 
-	Clear()
+	W := a.project.Width
+	H := a.project.Height
 
-	// Build the base grid from all saved shapes
-	g := canvas.RenderAll(a.project.Width, a.project.Height, a.shapes)
+	// Fixed layout constants
+	const (
+		headerRow = 1
+		keybindRow = 2
+		borderTop = 3       // row of the ┌ line
+		dataStart = 4       // first canvas data row
+		numColW   = 4       // "  0 " row-number column width
+	)
+	canvasCol := numColW + 1  // column where ┌ is drawn (1-based)
+	rulerRow  := borderTop + H + 1
+	statusRow := borderTop + H + 2
 
-	// If currently drawing, overlay preview
+	// ── Header bar (row 1) ────────────────────────────────────────────────
+	shapeNames := map[models.ShapeType]string{
+		models.ShapeRect:   "Rect",
+		models.ShapeCircle: "Circle",
+		models.ShapeLine:   "Line",
+	}
+	fillStr := "Outline"
+	if a.fillMode { fillStr = "Filled" }
+
+	PrintAt(1, headerRow,
+		BgBlue+FgBrightWhite+Bold+" "+a.project.Name+" "+Reset+
+			Dim+"  Shape:"+Reset+" "+shapeNames[a.shapeType]+
+			Dim+"  Fill:"+Reset+" "+fillStr+
+			Dim+"  Char:"+Reset+" "+FgBrightYellow+string(a.drawChar)+Reset+
+			Dim+"  Color:"+Reset+" "+ColorANSI(a.drawColor)+string(a.drawColor)+Reset+
+			Dim+"  Pos:"+Reset+fmt.Sprintf(" %d,%d", a.cx, a.cy)+
+			Dim+"  Shapes:"+Reset+fmt.Sprintf(" %d", len(a.shapes))+
+			"\033[K")
+
+	// ── Keybind / drawing-status bar (row 2) ─────────────────────────────
+	PrintAt(1, keybindRow, "\033[K") // clear line first
 	if a.drawing {
-		prev := canvas.NewGrid(a.project.Width, a.project.Height)
+		PrintAt(1, keybindRow,
+			FgBrightYellow+"  DRAWING "+Reset+
+				"Move cursor to end → press "+FgBrightGreen+"Space"+Reset+" to place  |  "+
+				FgBrightYellow+"Esc"+Reset+" cancel"+
+				"\033[K")
+	} else {
+		PrintAt(1, keybindRow,
+			Dim+"  "+Reset+
+				FgBrightYellow+"↑↓←→"+Reset+" move  "+
+				FgBrightYellow+"Space"+Reset+" place  "+
+				FgBrightYellow+"S"+Reset+" options  "+
+				FgBrightYellow+"U"+Reset+" undo  "+
+				FgBrightYellow+"X"+Reset+" clear  "+
+				FgBrightYellow+"H"+Reset+" help  "+
+				FgBrightYellow+"Q"+Reset+" quit"+
+				"\033[K")
+	}
+
+	// ── Build grid (saved shapes + live preview) ─────────────────────────
+	g := canvas.RenderAll(W, H, a.shapes)
+
+	// Preview overlay while drawing
+	if a.drawing {
+		prev := canvas.NewGrid(W, H)
 		ch := a.drawChar
-		switch a.selectedShape {
+		previewColor := a.drawColor
+		switch a.shapeType {
 		case models.ShapeRect:
-			canvas.DrawRect(prev, a.startX, a.startY, a.cursorX, a.cursorY, ch, a.fillMode)
+			canvas.DrawRect(prev, a.startX, a.startY, a.cx, a.cy, ch, previewColor, a.fillMode)
 		case models.ShapeCircle:
-			r := radius(a.startX, a.startY, a.cursorX, a.cursorY)
-			canvas.DrawCircle(prev, a.startX, a.startY, r, ch, a.fillMode)
+			r := dist(a.startX, a.startY, a.cx, a.cy)
+			canvas.DrawCircle(prev, a.startX, a.startY, r, ch, previewColor, a.fillMode)
 		case models.ShapeLine:
-			canvas.DrawLine(prev, a.startX, a.startY, a.cursorX, a.cursorY, ch)
+			canvas.DrawLine(prev, a.startX, a.startY, a.cx, a.cy, ch, previewColor)
 		}
-		// Merge preview into base grid (use different color — handled in render)
-		for y := 0; y < a.project.Height; y++ {
-			for x := 0; x < a.project.Width; x++ {
-				if prev.Get(x, y) != ' ' {
-					g.Set(x, y, prev.Get(x, y))
+		for y := 0; y < H; y++ {
+			for x := 0; x < W; x++ {
+				if c := prev.Get(x, y); c.Ch != ' ' {
+					g.Set(x, y, c.Ch, c.Color)
 				}
 			}
 		}
 	}
 
-	// Canvas offset on screen (leave room for header and sidebar)
-	offX := 6  // left offset (for row numbers)
-	offY := 3  // top offset (for header)
+	// ── Canvas border top (row 3) ────────────────────────────────────────
+	PrintAt(1, borderTop, Dim+Repeat(" ", numColW)+Reset+
+		FgCyan+"┌"+Repeat("─", W)+"┐"+Reset+"\033[K")
 
-	// Header bar
-	shapeLabel := map[models.ShapeType]string{
-		models.ShapeRect:   "Rectangle",
-		models.ShapeCircle: "Circle",
-		models.ShapeLine:   "Line",
-	}[a.selectedShape]
-	fillLabel := "Outline"
-	if a.fillMode { fillLabel = "Filled" }
+	// ── Canvas rows (rows 4 .. 4+H-1) ────────────────────────────────────
+	for y := 0; y < H; y++ {
+		screenRow := dataStart + y
 
-	header := fmt.Sprintf(
-		BgBlue+BrightWhite+Bold+" %s "+Reset+
-			Dim+"  Shape:"+Reset+" %s"+
-			Dim+"  Fill:"+Reset+" %s"+
-			Dim+"  Char:"+Reset+" "+BrightYellow+"%s"+Reset+
-			Dim+"  Pos:"+Reset+" %d,%d"+
-			Dim+"  Shapes:"+Reset+" %d",
-		a.project.Name, shapeLabel, fillLabel,
-		string(a.drawChar), a.cursorX, a.cursorY, len(a.shapes),
-	)
-	PrintAt(1, 1, header)
-
-	// Sub-header
-	if a.drawing {
-		PrintAt(1, 2, BrightYellow+"  DRAWING: "+Reset+
-			"Move cursor to end point, press "+BrightGreen+"Space"+Reset+" to place  |  "+
-			Yellow+"Esc"+Reset+" cancel")
-	} else {
-		PrintAt(1, 2, Dim+
-			"  Arrows"+Reset+":move  "+
-			Yellow+"Space"+Reset+":place  "+
-			Yellow+"S"+Reset+":shape menu  "+
-			Yellow+"U"+Reset+":undo  "+
-			Yellow+"X"+Reset+":clear  "+
-			Yellow+"H"+Reset+":help  "+
-			Yellow+"Q"+Reset+":quit")
-	}
-
-	// Top canvas border
-	PrintAt(offX, offY, Cyan+"┌"+strings.Repeat("─", a.project.Width)+"┐"+Reset)
-
-	// Draw each row
-	for y := 0; y < a.project.Height; y++ {
-		screenRow := offY + 1 + y
 		// Row number
-		PrintAtf(1, screenRow, Dim+"%3d "+Reset, y)
+		PrintfAt(1, screenRow, Dim+"%3d "+Reset, y)
+
 		// Left border
-		PrintAt(offX, screenRow, Cyan+"│"+Reset)
+		PrintAt(canvasCol, screenRow, FgCyan+"│"+Reset)
 
-		// Cells
-		for x := 0; x < a.project.Width; x++ {
-			screenCol := offX + 1 + x
-			ch := g.Get(x, y)
+		// Cells — write each one at its exact screen column
+		for x := 0; x < W; x++ {
+			col := canvasCol + 1 + x
+			cell := g.Get(x, y)
 
-			isCursor := (x == a.cursorX && y == a.cursorY)
-			isStart  := (a.drawing && x == a.startX && y == a.startY)
+			isCursor := x == a.cx && y == a.cy
+			isStart  := a.drawing && x == a.startX && y == a.startY
 
-			if isCursor {
-				PrintAt(screenCol, screenRow, BgGreen+Black+string(ch)+Reset)
-			} else if isStart {
-				PrintAt(screenCol, screenRow, BgYellow+Black+string(ch)+Reset)
-			} else if ch != ' ' {
-				PrintAt(screenCol, screenRow, BrightGreen+string(ch)+Reset)
-			} else {
-				PrintAt(screenCol, screenRow, Dim+"."+Reset)
+			switch {
+			case isCursor && isStart:
+				// cursor is sitting on start point
+				PrintAt(col, screenRow, BgYellow+FgBlack+"@"+Reset)
+			case isCursor:
+				PrintAt(col, screenRow, BgGreen+FgBlack+string(cell.Ch)+Reset)
+			case isStart:
+				PrintAt(col, screenRow, BgYellow+FgBlack+string(cell.Ch)+Reset)
+			case cell.Ch != ' ':
+				PrintAt(col, screenRow, ColorANSI(cell.Color)+Bold+string(cell.Ch)+Reset)
+			default:
+				PrintAt(col, screenRow, " ")
 			}
 		}
 
 		// Right border
-		PrintAt(offX+a.project.Width+1, screenRow, Cyan+"│"+Reset)
+		PrintAt(canvasCol+W+1, screenRow, FgCyan+"│"+Reset+"\033[K")
 	}
 
-	// Bottom border
-	PrintAt(offX, offY+a.project.Height+1, Cyan+"└"+strings.Repeat("─", a.project.Width)+"┘"+Reset)
+	// ── Canvas border bottom ──────────────────────────────────────────────
+	PrintAt(1, rulerRow-1, Dim+Repeat(" ", numColW)+Reset+
+		FgCyan+"└"+Repeat("─", W)+"┘"+Reset+"\033[K")
 
-	// X ruler
-	rulerRow := offY + a.project.Height + 2
-	PrintAt(offX+1, rulerRow, Dim)
-	for i := 0; i < a.project.Width; i += 10 {
-		PrintAtf(offX+1+i, rulerRow, "%-10d", i)
+	// ── X-axis ruler ─────────────────────────────────────────────────────
+	ruler := Repeat(" ", numColW+1) // align with canvas content
+	for i := 0; i < W; i += 10 {
+		marker := fmt.Sprintf("%-10d", i)
+		ruler += Dim + marker + Reset
 	}
-	Print(Reset)
+	PrintAt(1, rulerRow, ruler+"\033[K")
 
-	// Status message
-	if a.statusMsg != "" {
-		PrintAt(1, rulerRow+2, BrightGreen+"  "+a.statusMsg+Reset)
-		a.statusMsg = ""
+	// ── Status message ────────────────────────────────────────────────────
+	statusStr := ""
+	if a.status != "" {
+		statusStr = "  " + FgBrightGreen + a.status + Reset
+		a.status = "" // consume it
+	}
+	PrintAt(1, statusRow, statusStr+"\033[K")
+
+	// ── Sidebar (right of canvas) ─────────────────────────────────────────
+	sideX := canvasCol + W + 3 // 2 cols gap after right border
+
+	// Sidebar rows alongside canvas rows
+	sideRows := []string{
+		Bold + "  Shape list" + Reset,
+		Dim + "  " + Repeat("─", 22) + Reset,
+	}
+	if len(a.shapes) == 0 {
+		sideRows = append(sideRows, Dim+"  (empty)"+Reset)
+	} else {
+		// Show last N shapes that fit
+		maxShow := H - 4
+		start := 0
+		if len(a.shapes) > maxShow {
+			start = len(a.shapes) - maxShow
+		}
+		for i := start; i < len(a.shapes); i++ {
+			s := a.shapes[i]
+			icon := map[models.ShapeType]string{
+				models.ShapeRect:   "▭",
+				models.ShapeCircle: "◯",
+				models.ShapeLine:   "╱",
+			}[s.Type]
+			fill := "□"
+			if s.Filled { fill = "■" }
+			row := fmt.Sprintf("  %s %s"+ColorANSI(s.Color)+"%s"+Reset+" %s (%d,%d)",
+				icon, Dim, string(s.Color)[0:2], fill, s.X1, s.Y1)
+			sideRows = append(sideRows, row)
+		}
+	}
+	sideRows = append(sideRows, "")
+	sideRows = append(sideRows, Bold+"  Colors"+Reset)
+	for _, c := range models.AllColors {
+		bullet := "  "
+		if c == a.drawColor { bullet = FgBrightWhite + " ▶" + Reset }
+		sideRows = append(sideRows, bullet+" "+ColorANSI(c)+Bold+"██"+Reset+" "+string(c))
+	}
+
+	for i, row := range sideRows {
+		screenRow := borderTop + i
+		if screenRow > borderTop+H { break }
+		PrintAt(sideX, screenRow, row+"\033[K")
 	}
 }
 
-// ---------- key handling ----------
+// ── Key handlers ──────────────────────────────────────────────────────────────
 
 func (a *App) handleKey(key int) bool {
 	switch a.screen {
-	case ScreenProjects:
-		return a.handleProjectsKey(key)
-	case ScreenCanvas:
-		return a.handleCanvasKey(key)
-	case ScreenNewProject:
-		return a.handleNewProjectKey(key)
-	case ScreenShapeMenu:
-		return a.handleShapeMenuKey(key)
-	case ScreenHelp:
-		a.screen = ScreenCanvas
-		return true
+	case ScrProjects:   return a.keyProjects(key)
+	case ScrCanvas:     return a.keyCanvas(key)
+	case ScrNewProject: return a.keyNewProject(key)
+	case ScrShapeMenu:  return a.keyShapeMenu(key)
+	case ScrHelp:
+		a.screen = ScrCanvas
 	}
 	return true
 }
 
-func (a *App) handleProjectsKey(key int) bool {
+func (a *App) keyProjects(key int) bool {
 	switch key {
 	case KeyArrowUp:
-		if a.cursorY > 0 { a.cursorY-- }
+		if a.projCursor > 0 { a.projCursor-- }
 	case KeyArrowDown:
-		if a.cursorY < len(a.projects)-1 { a.cursorY++ }
+		if a.projCursor < len(a.projects)-1 { a.projCursor++ }
 	case KeyEnter:
-		if len(a.projects) > 0 && a.cursorY < len(a.projects) {
-			a.openProject(&a.projects[a.cursorY])
+		if len(a.projects) > 0 {
+			a.openProject(a.projects[a.projCursor])
 		}
 	case 'n', 'N':
 		a.inputBuf = ""
-		a.screen = ScreenNewProject
+		a.screen = ScrNewProject
 	case 'd', 'D':
-		if len(a.projects) > 0 && a.cursorY < len(a.projects) {
-			a.deleteProject(a.projects[a.cursorY].ID)
+		if len(a.projects) > 0 {
+			a.deleteProject(a.projects[a.projCursor].ID)
 		}
 	case 'q', 'Q':
 		return false
@@ -408,14 +549,16 @@ func (a *App) handleProjectsKey(key int) bool {
 	return true
 }
 
-func (a *App) handleNewProjectKey(key int) bool {
+func (a *App) keyNewProject(key int) bool {
 	switch key {
 	case KeyEscape:
-		a.screen = ScreenProjects
+		a.screen = ScrProjects
 	case KeyEnter:
-		if strings.TrimSpace(a.inputBuf) != "" {
-			a.createProject(strings.TrimSpace(a.inputBuf))
-			a.screen = ScreenCanvas
+		name := strings.TrimSpace(a.inputBuf)
+		if name != "" {
+			a.createProject(name)
+			ClearScreen() // clear once before entering canvas
+			Flush()
 		}
 	case KeyBackspace:
 		if len(a.inputBuf) > 0 {
@@ -423,166 +566,173 @@ func (a *App) handleNewProjectKey(key int) bool {
 			a.inputBuf = string(runes[:len(runes)-1])
 		}
 	default:
-		if key >= 32 && key < 127 && len(a.inputBuf) < 30 {
+		if key >= 32 && key < 127 && len(a.inputBuf) < 28 {
 			a.inputBuf += string(rune(key))
 		}
 	}
 	return true
 }
 
-func (a *App) handleShapeMenuKey(key int) bool {
+func (a *App) keyShapeMenu(key int) bool {
 	switch key {
-	case '1': a.selectedShape = models.ShapeRect
-	case '2': a.selectedShape = models.ShapeCircle
-	case '3': a.selectedShape = models.ShapeLine
+	case '1': a.shapeType = models.ShapeRect
+	case '2': a.shapeType = models.ShapeCircle
+	case '3': a.shapeType = models.ShapeLine
 	case 'f', 'F': a.fillMode = !a.fillMode
 	case 'c', 'C':
-		// Prompt for char inline
-		PrintAt(3, 19, "Enter new draw character: "+BrightYellow)
+		// inline: show prompt, read one char
+		PrintAt(3, 30, FgBrightYellow+"Type new draw character: "+Reset)
 		Flush()
 		ch := ReadKey()
 		if ch >= 32 && ch < 127 {
 			a.drawChar = rune(ch)
 		}
-		Print(Reset)
-	case KeyEnter, KeySpace:
-		a.screen = ScreenCanvas
-	case KeyEscape:
-		a.screen = ScreenCanvas
+	case KeyArrowLeft:
+		a.drawColor = prevColor(a.drawColor)
+	case KeyArrowRight:
+		a.drawColor = nextColor(a.drawColor)
+	case KeyEnter, KeyEscape, KeySpace:
+		ClearScreen() // clear before returning to canvas
+		Flush()
+		a.screen = ScrCanvas
 	}
 	return true
 }
 
-func (a *App) handleCanvasKey(key int) bool {
-	step := 1
-	switch key {
-	// Movement — arrow keys move cursor
-	case KeyArrowUp:
-		if a.cursorY > 0 { a.cursorY -= step }
-	case KeyArrowDown:
-		if a.cursorY < a.project.Height-1 { a.cursorY += step }
-	case KeyArrowLeft:
-		if a.cursorX > 0 { a.cursorX -= step }
-	case KeyArrowRight:
-		if a.cursorX < a.project.Width-1 { a.cursorX += step }
+func (a *App) keyCanvas(key int) bool {
+	if a.project == nil { return true }
+	W, H := a.project.Width, a.project.Height
 
-	// Place point / draw
+	switch key {
+	// ── cursor movement ──────────────────────────────────────────────────
+	case KeyArrowUp:
+		if a.cy > 0 { a.cy-- }
+	case KeyArrowDown:
+		if a.cy < H-1 { a.cy++ }
+	case KeyArrowLeft:
+		if a.cx > 0 { a.cx-- }
+	case KeyArrowRight:
+		if a.cx < W-1 { a.cx++ }
+
+	// ── place / draw ─────────────────────────────────────────────────────
 	case KeySpace, KeyEnter:
 		if !a.drawing {
-			// First point: set start
 			a.drawing = true
-			a.startX = a.cursorX
-			a.startY = a.cursorY
-			a.statusMsg = fmt.Sprintf("Start set at (%d,%d) — move and press Space to draw", a.startX, a.startY)
+			a.startX, a.startY = a.cx, a.cy
+			a.status = fmt.Sprintf("Start at (%d,%d) — move cursor, Space to draw", a.startX, a.startY)
 		} else {
-			// Second point: draw shape and save
 			a.commitShape()
 			a.drawing = false
 		}
 
+	// ── cancel / quit ────────────────────────────────────────────────────
 	case KeyEscape:
 		if a.drawing {
 			a.drawing = false
-			a.statusMsg = "Drawing cancelled"
+			a.status = "Cancelled"
 		} else {
-			a.screen = ScreenProjects
+			a.drawing = false
+			a.screen = ScrProjects
 			a.loadProjects()
+			a.projCursor = 0
 		}
 
+	// ── actions ──────────────────────────────────────────────────────────
 	case 's', 'S':
-		a.screen = ScreenShapeMenu
-
+		a.screen = ScrShapeMenu
+		a.drawing = false
 	case 'u', 'U':
 		a.undoLast()
-
 	case 'x', 'X':
 		a.clearCanvas()
-
 	case 'h', 'H':
-		a.screen = ScreenHelp
-
+		a.screen = ScrHelp
 	case 'q', 'Q':
 		a.drawing = false
-		a.screen = ScreenProjects
-		a.project = nil
-		a.cursorY = 0
+		a.screen = ScrProjects
 		a.loadProjects()
+		a.projCursor = 0
 	}
 	return true
 }
 
-// ---------- data operations ----------
+// ── Data operations ───────────────────────────────────────────────────────────
 
 func (a *App) loadProjects() {
 	db.DB.Preload("Shapes").Order("created_at desc").Find(&a.projects)
-	if a.cursorY >= len(a.projects) {
-		a.cursorY = 0
-	}
+	if a.projCursor >= len(a.projects) { a.projCursor = 0 }
 }
 
-func (a *App) openProject(p *models.Project) {
-	a.project = p
-	db.DB.Where("project_id = ? AND deleted_at IS NULL", p.ID).
+func (a *App) openProject(p models.Project) {
+	// Take a fresh copy from DB
+	var proj models.Project
+	db.DB.First(&proj, p.ID)
+	a.project = &proj
+	db.DB.Where("project_id = ? AND deleted_at IS NULL", proj.ID).
 		Order("created_at asc").Find(&a.shapes)
-	a.cursorX = p.Width / 2
-	a.cursorY = p.Height / 2
+	a.cx = proj.Width / 2
+	a.cy = proj.Height / 2
 	a.drawing = false
-	a.screen = ScreenCanvas
-	a.statusMsg = fmt.Sprintf("Opened %q  —  press H for help", p.Name)
+	a.screen = ScrCanvas
+	a.status = fmt.Sprintf("Opened %q  —  H for help", proj.Name)
+	ClearScreen()
+	Flush()
 }
 
 func (a *App) createProject(name string) {
-	p := models.Project{Name: name, Width: 60, Height: 28}
+	p := models.Project{Name: name, Width: 70, Height: 28}
 	db.DB.Create(&p)
 	a.project = &p
 	a.shapes = nil
-	a.cursorX = p.Width / 2
-	a.cursorY = p.Height / 2
-	a.statusMsg = fmt.Sprintf("Created %q", p.Name)
+	a.cx = p.Width / 2
+	a.cy = p.Height / 2
+	a.drawing = false
+	a.screen = ScrCanvas
+	a.status = "Project created — H for help"
 }
 
 func (a *App) deleteProject(id uint) {
 	db.DB.Delete(&models.Project{}, id)
 	a.loadProjects()
-	a.statusMsg = "Project deleted"
+	a.status = "Deleted"
 }
 
 func (a *App) commitShape() {
 	if a.project == nil { return }
-
 	s := models.Shape{
 		ProjectID: a.project.ID,
-		Type:      a.selectedShape,
+		Type:      a.shapeType,
 		X1:        a.startX,
 		Y1:        a.startY,
 		Filled:    a.fillMode,
 		Char:      string(a.drawChar),
+		Color:     a.drawColor,
 	}
-
-	switch a.selectedShape {
+	switch a.shapeType {
 	case models.ShapeRect, models.ShapeLine:
-		s.X2 = a.cursorX
-		s.Y2 = a.cursorY
+		s.X2, s.Y2 = a.cx, a.cy
 	case models.ShapeCircle:
-		s.Radius = radius(a.startX, a.startY, a.cursorX, a.cursorY)
-		s.X2 = a.cursorX
-		s.Y2 = a.cursorY
+		r := dist(a.startX, a.startY, a.cx, a.cy)
+		s.Radius = r
+		s.X2, s.Y2 = a.cx, a.cy
 	}
-
 	db.DB.Create(&s)
 	a.shapes = append(a.shapes, s)
-	a.statusMsg = fmt.Sprintf("Drew %s at (%d,%d) [%s] %s",
-		string(a.selectedShape), a.startX, a.startY,
-		string(a.drawChar),
-		map[bool]string{true: "filled", false: "outline"}[a.fillMode])
+	fillLabel := "outline"
+	if s.Filled { fillLabel = "filled" }
+	a.status = fmt.Sprintf("Drew %s [%s] %s at (%d,%d)",
+		s.Type, string(a.drawChar), fillLabel, a.startX, a.startY)
 }
 
 func (a *App) undoLast() {
-	if len(a.shapes) == 0 { return }
+	if len(a.shapes) == 0 {
+		a.status = "Nothing to undo"
+		return
+	}
 	last := a.shapes[len(a.shapes)-1]
 	db.DB.Delete(&models.Shape{}, last.ID)
 	a.shapes = a.shapes[:len(a.shapes)-1]
-	a.statusMsg = "Undone last shape"
+	a.status = "Undone"
 }
 
 func (a *App) clearCanvas() {
@@ -590,24 +740,38 @@ func (a *App) clearCanvas() {
 	db.DB.Where("project_id = ?", a.project.ID).Delete(&models.Shape{})
 	a.shapes = nil
 	a.drawing = false
-	a.statusMsg = "Canvas cleared"
+	a.status = "Canvas cleared"
 }
 
-// ---------- helpers ----------
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-func radius(x1, y1, x2, y2 int) int {
+func dist(x1, y1, x2, y2 int) int {
 	dx := float64(x2-x1) * 0.5
 	dy := float64(y2 - y1)
-	r := int(sqrt(dx*dx + dy*dy))
+	r := int(sqrtf(dx*dx + dy*dy))
 	if r < 1 { r = 1 }
 	return r
 }
 
-func sqrt(x float64) float64 {
+func sqrtf(x float64) float64 {
 	if x <= 0 { return 0 }
-	z := x / 2
-	for i := 0; i < 20; i++ {
-		z -= (z*z - x) / (2 * z)
-	}
+	z := x
+	for i := 0; i < 50; i++ { z = (z + x/z) / 2 }
 	return z
+}
+
+func nextColor(c models.ColorName) models.ColorName {
+	all := models.AllColors
+	for i, v := range all {
+		if v == c { return all[(i+1)%len(all)] }
+	}
+	return all[0]
+}
+
+func prevColor(c models.ColorName) models.ColorName {
+	all := models.AllColors
+	for i, v := range all {
+		if v == c { return all[(i-1+len(all))%len(all)] }
+	}
+	return all[0]
 }
