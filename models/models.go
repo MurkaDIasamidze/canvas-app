@@ -53,7 +53,6 @@ type Shape struct {
 	Y2        int
 	Radius    int
 	Filled    bool
-	Char      string    `gorm:"default:'*'"`
 	Color     ColorName `gorm:"default:'green'"`
 	CreatedAt time.Time
 	DeletedAt gorm.DeletedAt `gorm:"index"`
