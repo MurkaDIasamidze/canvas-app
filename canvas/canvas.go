@@ -5,68 +5,96 @@ import (
 	"math"
 )
 
+// ── Cell ──────────────────────────────────────────────────────
+
 type Cell struct {
 	Ch    rune
 	Color models.ColorName
+	Empty bool // true = no shape was drawn here
 }
+
+// ── Grid ──────────────────────────────────────────────────────
 
 type Grid struct {
-	Width, Height int
-	Cells         [][]Cell
+	W, H  int
+	Cells [][]Cell
 }
 
-func NewGrid(w, h int) *Grid {
+func New(w, h int, empty rune) *Grid {
 	cells := make([][]Cell, h)
 	for i := range cells {
 		cells[i] = make([]Cell, w)
-		for j := range cells[i] { cells[i][j] = Cell{Ch: ' '} }
+		for j := range cells[i] {
+			cells[i][j] = Cell{Ch: empty, Empty: true}
+		}
 	}
-	return &Grid{w, h, cells}
+	return &Grid{W: w, H: h, Cells: cells}
 }
 
 func (g *Grid) Set(x, y int, ch rune, c models.ColorName) {
-	if x >= 0 && x < g.Width && y >= 0 && y < g.Height {
-		g.Cells[y][x] = Cell{ch, c}
+	if x >= 0 && x < g.W && y >= 0 && y < g.H {
+		g.Cells[y][x] = Cell{Ch: ch, Color: c}
 	}
 }
 
 func (g *Grid) Get(x, y int) Cell {
-	if x >= 0 && x < g.Width && y >= 0 && y < g.Height { return g.Cells[y][x] }
-	return Cell{Ch: ' '}
-}
-
-func DrawShape(g *Grid, s models.Shape) {
-	c := s.Color
-	if c == "" { c = models.ColorGreen }
-	switch s.Type {
-	case models.ShapeRect:   drawRect(g, s.X1, s.Y1, s.X2, s.Y2, c, s.Filled)
-	case models.ShapeCircle: drawCircle(g, s.X1, s.Y1, s.Radius, c, s.Filled)
-	case models.ShapeLine:   drawLine(g, s.X1, s.Y1, s.X2, s.Y2, c)
+	if x >= 0 && x < g.W && y >= 0 && y < g.H {
+		return g.Cells[y][x]
 	}
+	return Cell{Empty: true}
 }
 
-// drawRect — outline uses ┌─┐│└┘, filled uses █
-func drawRect(g *Grid, x1, y1, x2, y2 int, c models.ColorName, filled bool) {
+// ── Config-driven chars ────────────────────────────────────────
+
+type Chars struct {
+	// Rect outline
+	RectTop, RectBottom, RectLeft, RectRight rune
+	RectTL, RectTR, RectBL, RectBR          rune
+	RectFill                                 rune
+	// Circle
+	CircH, CircV, CircD1, CircD2            rune
+	CircFill                                 rune
+	// Line
+	LineH, LineV, LineD1, LineD2            rune
+	// Free
+	Free                                    rune
+}
+
+// ── Drawing functions ──────────────────────────────────────────
+
+// Rect draws a rectangle using the provided char config.
+func Rect(g *Grid, x1, y1, x2, y2 int, c models.ColorName, filled bool, ch Chars) {
 	if x1 > x2 { x1, x2 = x2, x1 }
 	if y1 > y2 { y1, y2 = y2, y1 }
+
 	if filled {
 		for y := y1; y <= y2; y++ {
-			for x := x1; x <= x2; x++ { g.Set(x, y, '█', c) }
+			for x := x1; x <= x2; x++ {
+				g.Set(x, y, ch.RectFill, c)
+			}
 		}
 		return
 	}
-	for x := x1 + 1; x < x2; x++ { g.Set(x, y1, '─', c); g.Set(x, y2, '─', c) }
-	for y := y1 + 1; y < y2; y++ { g.Set(x1, y, '│', c); g.Set(x2, y, '│', c) }
-	g.Set(x1, y1, '┌', c); g.Set(x2, y1, '┐', c)
-	g.Set(x1, y2, '└', c); g.Set(x2, y2, '┘', c)
+	// top & bottom edges
+	for x := x1 + 1; x < x2; x++ {
+		g.Set(x, y1, ch.RectTop, c)
+		g.Set(x, y2, ch.RectBottom, c)
+	}
+	// left & right edges
+	for y := y1 + 1; y < y2; y++ {
+		g.Set(x1, y, ch.RectLeft, c)
+		g.Set(x2, y, ch.RectRight, c)
+	}
+	// corners
+	g.Set(x1, y1, ch.RectTL, c)
+	g.Set(x2, y1, ch.RectTR, c)
+	g.Set(x1, y2, ch.RectBL, c)
+	g.Set(x2, y2, ch.RectBR, c)
 }
 
-// drawCircle — uses Bresenham midpoint algorithm for a crisp single-pixel border.
-// Each point on the circle is assigned ─ │ ╱ ╲ based on the local tangent angle,
-// so the outline looks like a smooth curve made of box-drawing characters.
-// Filled uses █.
-func drawCircle(g *Grid, cx, cy, r int, c models.ColorName, filled bool) {
-	if r <= 0 { g.Set(cx, cy, '█', c); return }
+// Circle draws a circle using midpoint algorithm + tangent char selection.
+func Circle(g *Grid, cx, cy, r int, c models.ColorName, filled bool, ch Chars) {
+	if r <= 0 { g.Set(cx, cy, ch.CircFill, c); return }
 
 	if filled {
 		rf := float64(r)
@@ -74,64 +102,55 @@ func drawCircle(g *Grid, cx, cy, r int, c models.ColorName, filled bool) {
 			for x := cx - r*2; x <= cx+r*2; x++ {
 				dx := float64(x-cx) * 0.5
 				dy := float64(y - cy)
-				if math.Sqrt(dx*dx+dy*dy) <= rf+0.3 { g.Set(x, y, '█', c) }
+				if math.Sqrt(dx*dx+dy*dy) <= rf+0.3 {
+					g.Set(x, y, ch.CircFill, c)
+				}
 			}
 		}
 		return
 	}
 
-	// Outline: Bresenham midpoint circle, then pick char from tangent angle
-	// The tangent at angle θ is perpendicular to the radius.
-	// We compute the 8 octants and map to the best char.
-	plotCircle := func(px, py, ox, oy int) {
-		// ox,oy is the offset from center — the radius vector points outward.
-		// Tangent is perpendicular: (-oy, ox). Use the tangent to pick char.
-		// Account for terminal aspect ratio (chars ~2x taller than wide).
+	plot := func(px, py, ox, oy int) {
 		tx := float64(-oy)
 		ty := float64(ox) * 0.5
-		angle := math.Atan2(ty, tx) * 180 / math.Pi
-		if angle < 0 { angle += 180 }
-		var ch rune
+		ang := math.Atan2(ty, tx) * 180 / math.Pi
+		if ang < 0 { ang += 180 }
+		var r rune
 		switch {
-		case angle < 22.5 || angle >= 157.5: ch = '─'
-		case angle < 67.5:                   ch = '╱'
-		case angle < 112.5:                  ch = '│'
-		default:                             ch = '╲'
+		case ang < 22.5 || ang >= 157.5: r = ch.CircH
+		case ang < 67.5:                 r = ch.CircD1
+		case ang < 112.5:                r = ch.CircV
+		default:                         r = ch.CircD2
 		}
-		g.Set(px, py, ch, c)
+		g.Set(px, py, r, c)
 	}
 
 	x, y := 0, r
 	d := 1 - r
 	for x <= y {
-		// All 8 symmetry points — terminal x is doubled for aspect ratio
-		plotCircle(cx+x*2, cy-y,  x,  -y)
-		plotCircle(cx-x*2, cy-y,  -x, -y)
-		plotCircle(cx+x*2, cy+y,  x,  y)
-		plotCircle(cx-x*2, cy+y,  -x, y)
-		plotCircle(cx+y*2, cy-x,  y,  -x)
-		plotCircle(cx-y*2, cy-x,  -y, -x)
-		plotCircle(cx+y*2, cy+x,  y,  x)
-		plotCircle(cx-y*2, cy+x,  -y, x)
+		plot(cx+x*2, cy-y,  x, -y); plot(cx-x*2, cy-y, -x, -y)
+		plot(cx+x*2, cy+y,  x,  y); plot(cx-x*2, cy+y, -x,  y)
+		plot(cx+y*2, cy-x,  y, -x); plot(cx-y*2, cy-x, -y, -x)
+		plot(cx+y*2, cy+x,  y,  x); plot(cx-y*2, cy+x, -y,  x)
 		if d < 0 { d += 2*x + 3 } else { d += 2*(x-y) + 5; y-- }
 		x++
 	}
 }
 
-// drawLine — Bresenham, picks ─ │ ╱ ╲ from overall slope
-func drawLine(g *Grid, x1, y1, x2, y2 int, c models.ColorName) {
+// Line draws a line using Bresenham + slope-based char selection.
+func Line(g *Grid, x1, y1, x2, y2 int, c models.ColorName, ch Chars) {
 	dx, dy := x2-x1, y2-y1
-	adx, ady := abs(dx), abs(dy)
-	var ch rune
+	adx, ady := iabs(dx), iabs(dy)
+	var r rune
 	switch {
-	case ady == 0:                               ch = '─'
-	case adx == 0:                               ch = '│'
-	case (dx > 0) == (dy > 0):                  ch = '╲'
-	default:                                     ch = '╱'
+	case ady == 0:            r = ch.LineH
+	case adx == 0:            r = ch.LineV
+	case (dx > 0) == (dy > 0): r = ch.LineD2
+	default:                  r = ch.LineD1
 	}
-	sx, sy, err := sign(dx), sign(dy), adx-ady
+	sx, sy, err := isign(dx), isign(dy), adx-ady
 	for x, y := x1, y1; ; {
-		g.Set(x, y, ch, c)
+		g.Set(x, y, r, c)
 		if x == x2 && y == y2 { break }
 		e2 := 2 * err
 		if e2 > -ady { err -= ady; x += sx }
@@ -139,22 +158,31 @@ func drawLine(g *Grid, x1, y1, x2, y2 int, c models.ColorName) {
 	}
 }
 
-func RenderAll(w, h int, shapes []models.Shape) *Grid {
-	g := NewGrid(w, h)
-	for _, s := range shapes { DrawShape(g, s) }
+// Dot sets a single cell (used for freehand drawing).
+func Dot(g *Grid, x, y int, c models.ColorName, ch rune) {
+	g.Set(x, y, ch, c)
+}
+
+// RenderAll draws all saved shapes onto a fresh grid.
+func RenderAll(w, h int, shapes []models.Shape, empty rune, ch Chars) *Grid {
+	g := New(w, h, empty)
+	for _, s := range shapes {
+		DrawShape(g, s, ch)
+	}
 	return g
 }
 
-// DrawRect / DrawCircle / DrawLine exported for preview in app.go
-func DrawRect(g *Grid, x1, y1, x2, y2 int, c models.ColorName, filled bool) {
-	drawRect(g, x1, y1, x2, y2, c, filled)
-}
-func DrawCircle(g *Grid, cx, cy, r int, c models.ColorName, filled bool) {
-	drawCircle(g, cx, cy, r, c, filled)
-}
-func DrawLine(g *Grid, x1, y1, x2, y2 int, c models.ColorName) {
-	drawLine(g, x1, y1, x2, y2, c)
+// DrawShape dispatches to the correct drawing function.
+func DrawShape(g *Grid, s models.Shape, ch Chars) {
+	c := s.Color
+	if c == "" { c = models.ColGreen }
+	switch s.Type {
+	case models.ShapeRect:   Rect(g, s.X1, s.Y1, s.X2, s.Y2, c, s.Filled, ch)
+	case models.ShapeCircle: Circle(g, s.X1, s.Y1, s.Radius, c, s.Filled, ch)
+	case models.ShapeLine:   Line(g, s.X1, s.Y1, s.X2, s.Y2, c, ch)
+	case models.ShapeFree:   Dot(g, s.X1, s.Y1, c, ch.Free)
+	}
 }
 
-func abs(x int) int { if x < 0 { return -x }; return x }
-func sign(x int) int { if x < 0 { return -1 } else if x > 0 { return 1 }; return 0 }
+func iabs(x int) int  { if x < 0 { return -x }; return x }
+func isign(x int) int { if x < 0 { return -1 } else if x > 0 { return 1 }; return 0 }

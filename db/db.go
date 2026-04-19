@@ -15,29 +15,24 @@ import (
 var DB *gorm.DB
 
 func Connect() {
-	dsn := fmt.Sprintf(
-		"host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
-		getEnv("DB_HOST", "localhost"),
-		getEnv("DB_USER", "postgres"),
-		getEnv("DB_PASSWORD", "root"),
-		getEnv("DB_NAME", "postgres"),
-		getEnv("DB_PORT", "5432"),
+	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
+		env("DB_HOST", "localhost"),
+		env("DB_USER", "postgres"),
+		env("DB_PASSWORD", "root"),
+		env("DB_NAME", "postgres"),
+		env("DB_PORT", "5432"),
 	)
-
 	var err error
 	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent), // silent — TUI owns the screen
+		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
-		log.Fatalf("DB connection failed: %v", err)
+		log.Fatalf("DB: %v", err)
 	}
-
 	DB.AutoMigrate(&models.Project{}, &models.Shape{})
 }
 
-func getEnv(k, fallback string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return fallback
+func env(k, def string) string {
+	if v := os.Getenv(k); v != "" { return v }
+	return def
 }

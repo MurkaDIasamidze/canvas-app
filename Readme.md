@@ -1,89 +1,174 @@
-# ASCII Canvas Studio — Pure Terminal TUI
+# ASCII Canvas Studio
 
-A fully interactive terminal drawing app. **No browser, no frontend.**
-Runs directly in CMD, PowerShell, or any Unix terminal.
+A terminal drawing app. Runs entirely in CMD, PowerShell, or any Unix terminal.
+No browser. No external TUI library. Pure Go + ANSI escape codes.
 
-## Folder Structure
+---
+
+## Folder structure
 
 ```
 canvas-tui/
-├── main.go
+├── main.go          ← entry point + ALL config (edit this)
 ├── go.mod
-├── .env               ← copy from .env.example
+├── .env             ← database credentials
 ├── db/
-│   └── db.go          ← PostgreSQL connection
+│   └── db.go        ← PostgreSQL connection
 ├── models/
-│   └── models.go      ← Project + Shape models
+│   └── models.go    ← data structures
 ├── canvas/
-│   └── canvas.go      ← Drawing engine (rect/circle/line)
+│   └── canvas.go    ← drawing engine
 └── tui/
-    ├── app.go          ← Main TUI app & all screens
-    ├── term.go         ← ANSI terminal helpers
-    ├── init_windows.go ← Windows: enable ANSI + UTF-8 via kernel32
-    ├── init_unix.go    ← Unix: no-op
-    ├── input_windows.go← Windows: ReadConsoleInputW (arrow keys etc)
-    ├── input_unix.go   ← Unix: raw mode via stty
-    ├── raw_windows.go  ← Windows: raw mode stubs
-    └── raw_unix.go     ← Unix: raw mode wrappers
+    ├── app.go             ← main app logic
+    ├── platform_windows.go ← Windows terminal + input
+    └── platform_unix.go   ← Linux/macOS terminal + input
 ```
+
+---
 
 ## Setup
 
-### 1. Copy .env
+### 1. PostgreSQL
+
+```sql
+-- run in psql
+CREATE DATABASE postgres; -- already exists by default
 ```
+
+### 2. Environment
+
+```powershell
 copy .env.example .env
 ```
-Edit `.env` with your DB credentials (defaults match your setup).
 
-### 2. Install dependencies
+Edit `.env`:
 ```
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=root
+DB_NAME=postgres
+```
+
+### 3. Dependencies
+
+```powershell
 go mod tidy
 ```
 
-### 3. Run
+### 4. Run
+
+```powershell
+go run .
 ```
-go run main.go
+
+> **Important:** always use `go run .` (with the dot), not `go run main.go`.
+> The dot tells Go to compile all `.go` files in the directory together.
+
+---
+
+## Configuration
+
+Everything is in `main.go` at the top — no separate config file needed.
+
+```go
+// Canvas fills the full terminal window (true) or use fixed size (false)
+const fullConsole = true
+const canvasW     = 120   // used only when fullConsole = false
+const canvasH     = 40    // used only when fullConsole = false
+
+// Default tool: "rect" "circle" "line" "free"
+const defaultTool = "rect"
+
+// Default fill: false = outline, true = filled
+const defaultFill = false
+
+// Default color: "green" "cyan" "yellow" "red" "magenta" "blue" "white"
+const defaultColor = "green"
+
+// Characters — change to any ASCII/Unicode char you like
+const rectFill     = '█'   // filled rectangle
+const rectCornerTL = '┌'   // top-left corner
+const lineH        = '─'   // horizontal line
+const freeChar     = '█'   // freehand paint
+// ... etc
 ```
+
+---
 
 ## Controls
 
-### Project List
+### Project list
+
 | Key | Action |
 |-----|--------|
-| ↑ ↓ | Navigate projects |
-| Enter | Open project |
-| N | New project |
-| D | Delete project |
-| Q | Quit |
+| `↑` `↓` | Navigate projects |
+| `Enter` | Open project |
+| `N` | New project |
+| `D` | Delete project |
+| `Q` | Quit |
 
-### Canvas (inside a project)
+### Canvas
+
 | Key | Action |
 |-----|--------|
-| ↑ ↓ ← → | Move cursor |
-| Space / Enter | Place point (1st = start, 2nd = draw) |
-| S | Open shape/fill/char menu |
-| U | Undo last shape |
-| X | Clear entire canvas |
-| H | Help screen |
-| Q | Back to project list |
-| Esc | Cancel drawing / back |
+| `↑` `↓` `←` `→` | Move cursor |
+| `Space` | Place start point, then draw on second press |
+| `O` | Open options menu (tool / fill / color) |
+| `U` | Undo last shape |
+| `X` | Clear all shapes |
+| `H` | Help screen |
+| `Q` | Back to project list |
+| `Esc` | Cancel current drawing |
 
-### Shape Menu (press S)
+### Options menu (`O`)
+
 | Key | Action |
 |-----|--------|
-| 1 | Rectangle |
-| 2 | Circle |
-| 3 | Line |
-| F | Toggle filled / outline |
-| C | Change draw character |
-| Enter | Back to canvas |
+| `R` | Rectangle tool |
+| `C` | Circle tool |
+| `L` | Line tool |
+| `F` | Freehand tool |
+| `T` | Toggle outline / filled |
+| `←` `→` | Change color |
+| `Enter` | Back to canvas |
 
-## How Drawing Works
+---
 
-1. Press **S** → pick shape, fill mode, and character
-2. Move cursor with **arrow keys** to where you want to start
-3. Press **Space** — this sets the start point (shown in yellow)
-4. Move cursor to the end point — **live preview** shows as you move
-5. Press **Space** again — shape is drawn and saved to DB
+## Drawing workflow
 
-For circles: start = center, end = any point on the edge (sets radius).
+1. Open or create a project
+2. Press `O` → choose tool, fill mode, color
+3. Move cursor with arrow keys to start position
+4. Press `Space` — start point is set (shown in yellow)
+5. Move cursor to end position — **live preview** shows the shape
+6. Press `Space` again — shape is drawn and saved to database
+
+For **freehand**: just move cursor and press `Space` to paint individual cells.
+
+---
+
+## Shapes and their characters
+
+| Shape | Outline | Filled |
+|-------|---------|--------|
+| Rectangle | `┌─┐ │ └┘` | `█` |
+| Circle | `─ │ ╱ ╲` (by tangent angle) | `█` |
+| Line | `─ │ ╱ ╲` (by slope) | — |
+| Freehand | — | `█` |
+
+All characters are configurable in `main.go`.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|-------|-----------|
+| Language | Go 1.21 |
+| Database | PostgreSQL |
+| ORM | GORM |
+| Terminal colors | Raw ANSI escape codes (no library) |
+| Windows input | `ReadConsoleInputW` via `kernel32.dll` |
+| Unix input | `stty raw` + `os.Stdin.Read` |
+| TUI framework | None — built from scratch |
