@@ -268,31 +268,35 @@ func (a *App) drawCanvas() {
 	statusRow := th // last terminal row = status bar
 
 	// Build grid from saved shapes
-	g := canvas.RenderAll(W, H, a.shapes, ' ', a.chars)
+	g := canvas.RenderAll(W, H, a.shapes, a.chars)
 
 	// Freehand: paint current cursor position while drawing
 	if a.drawing && a.tool == "free" {
-		canvas.Dot(g, a.cx, a.cy, a.color, a.chars.Free)
+		g.StrokeColor = a.color
+		g.SetPixel(a.cx, a.cy)
 	}
 
 	// Live preview for other tools
 	if a.drawing && a.tool != "free" {
-		p := canvas.New(W, H, ' ')
+		p := canvas.New(W, H)
+		p.Chars = a.chars
 		switch a.tool {
 		case "rect":
-			canvas.Rect(p, a.sx, a.sy, a.cx, a.cy, a.color, a.fill, a.chars)
+			p.StrokeColor = a.color
+			p.FillColor   = a.color
+			p.Chars       = a.chars
+			x, y := min2(a.sx, a.cx), min2(a.sy, a.cy)
+			w, h := iabs(a.cx-a.sx)+1, iabs(a.cy-a.sy)+1
+			if a.fill { p.FillRect(x, y, w, h) } else { p.StrokeRect(x, y, w, h) }
 		case "circle":
-			canvas.Circle(p, a.sx, a.sy, idist(a.sx, a.sy, a.cx, a.cy), a.color, a.fill, a.chars)
+			p.StrokeColor = a.color
+			p.FillColor   = a.color
+			if a.fill { p.FillCircle(a.sx, a.sy, idist(a.sx, a.sy, a.cx, a.cy)) } else { p.StrokeCircle(a.sx, a.sy, idist(a.sx, a.sy, a.cx, a.cy)) }
 		case "line":
-			canvas.Line(p, a.sx, a.sy, a.cx, a.cy, a.color, a.chars)
+			p.StrokeColor = a.color
+			p.DrawLine(a.sx, a.sy, a.cx, a.cy)
 		}
-		for y := 0; y < H; y++ {
-			for x := 0; x < W; x++ {
-				if c := p.Get(x, y); !c.Empty {
-					g.Set(x, y, c.Ch, c.Color)
-				}
-			}
-		}
+		g.DrawContext(p, 0, 0)
 	}
 
 	// ── Render every cell directly onto the terminal ──────────
@@ -573,3 +577,6 @@ func shiftColor(c models.ColorName, d int) models.ColorName {
 	}
 	return all[0]
 }
+
+func min2(a, b int) int { if a < b { return a }; return b }
+func iabs(x int) int    { if x < 0 { return -x }; return x }
