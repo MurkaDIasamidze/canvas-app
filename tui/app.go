@@ -34,6 +34,9 @@ type App struct {
 	// canvas dimensions (set from config or terminal size)
 	cw, ch     int
 
+	// preset drawing function from config
+	preset     func(*canvas.Context)
+
 	// cursor
 	cx, cy     int
 
@@ -68,6 +71,10 @@ type Config struct {
 	DefaultFill  bool
 	DefaultColor string
 	Chars        canvas.Chars
+	// PresetShapes is called with a fresh canvas context on startup.
+	// Draw any shapes here using the JS-canvas-style API.
+	// They appear as a background layer under any interactively drawn shapes.
+	PresetShapes func(*canvas.Context)
 }
 
 func Run(cfg Config) {
@@ -86,14 +93,18 @@ func Run(cfg Config) {
 	color := models.ColorName(cfg.DefaultColor)
 	if color == "" { color = models.ColGreen }
 
+	preset := cfg.PresetShapes
+	if preset == nil { preset = func(*canvas.Context) {} }
+
 	a := &App{
-		scr:   scrProjects,
-		cw:    cw,
-		ch:    ch,
-		tool:  cfg.DefaultTool,
-		fill:  cfg.DefaultFill,
-		color: color,
-		chars: cfg.Chars,
+		scr:    scrProjects,
+		cw:     cw,
+		ch:     ch,
+		tool:   cfg.DefaultTool,
+		fill:   cfg.DefaultFill,
+		color:  color,
+		chars:  cfg.Chars,
+		preset: preset,
 	}
 
 	db.Connect()
@@ -267,8 +278,12 @@ func (a *App) drawCanvas() {
 	W, H := a.cw, a.ch
 	statusRow := th // last terminal row = status bar
 
-	// Build grid from saved shapes
-	g := canvas.RenderAll(W, H, a.shapes, a.chars)
+	// Build grid: first apply preset shapes as background, then saved shapes on top
+	g := canvas.New(W, H)
+	g.Chars = a.chars
+	a.preset(g)                                    // programmatic preset layer
+	over := canvas.RenderAll(W, H, a.shapes, a.chars) // interactive shapes layer
+	g.DrawContext(over, 0, 0)                      // merge: interactive on top
 
 	// Freehand: paint current cursor position while drawing
 	if a.drawing && a.tool == "free" {

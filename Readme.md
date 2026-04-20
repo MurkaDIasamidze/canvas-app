@@ -19,8 +19,6 @@ go mod tidy
 go run .
 ```
 
-> ⚠️ Always use `go run .` not `go run main.go`
-
 ---
 
 ## Project Structure

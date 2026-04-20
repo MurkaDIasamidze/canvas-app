@@ -10,71 +10,105 @@ import (
 
 func init() { godotenv.Load() }
 
-// ═══════════════════════════════════════════════════════════════
-//  CONFIG — change anything here to customise the app
-// ═══════════════════════════════════════════════════════════════
+// ╔══════════════════════════════════════════════════════════════════╗
+// ║                        CANVAS SETTINGS                          ║
+// ╚══════════════════════════════════════════════════════════════════╝
 
-// FullConsole: true  → canvas fills the entire terminal window
-//              false → use CanvasW / CanvasH instead
+// ── Size ──────────────────────────────────────────────────────────────
+//
+//	fullConsole = true  → canvas fills your entire terminal window
+//	fullConsole = false → use the fixed width/height below
 const fullConsole = true
 const canvasW     = 120
 const canvasH     = 40
 
-// Show coordinate numbers along edges of the canvas
-const showRulers = false
-
-// Default tool on startup: "rect" "circle" "line" "free"
+// ── Starting tool ─────────────────────────────────────────────────────
+//	"rect"    rectangle
+//	"circle"  circle
+//	"line"    straight line
+//	"free"    freehand pixel paint
 const defaultTool = "rect"
 
-// Default fill mode: false = outline, true = filled
+// ── Starting fill mode ────────────────────────────────────────────────
+//	false = outline only
+//	true  = filled solid
 const defaultFill = false
 
-// Default color: "green" "cyan" "yellow" "red" "magenta" "blue" "white"
+// ── Starting color ────────────────────────────────────────────────────
+//	"green"  "cyan"  "yellow"  "red"  "magenta"  "blue"  "white"
 const defaultColor = "green"
 
-// ── Characters used for drawing ──────────────────────────────
-// Rectangle outline
-const rectTop      = '─'
-const rectBottom   = '─'
-const rectLeft     = '│'
-const rectRight    = '│'
-const rectCornerTL = '┌'
-const rectCornerTR = '┐'
-const rectCornerBL = '└'
-const rectCornerBR = '┘'
-// Rectangle filled
-const rectFill     = '█'
 
-// Circle outline (chosen by tangent angle)
-const circleH     = '─'
-const circleV     = '│'
-const circleDiag1 = '╱'
-const circleDiag2 = '╲'
-// Circle filled
-const circleFill  = '█'
+// ── Rectangle outline ─────────────────────────────────────────────────
+const (
+	rectCornerTL = '┌' // top-left corner
+	rectCornerTR = '┐' // top-right corner
+	rectCornerBL = '└' // bottom-left corner
+	rectCornerBR = '┘' // bottom-right corner
+	rectTop      = '─' // top edge
+	rectBottom   = '─' // bottom edge
+	rectLeft     = '│' // left edge
+	rectRight    = '│' // right edge
+)
 
-// Line (chosen by slope)
-const lineH     = '─'
-const lineV     = '│'
-const lineDiag1 = '╱'
-const lineDiag2 = '╲'
+// ── Rectangle filled ──────────────────────────────────────────────────
+const rectFill = '█'
 
-// Freehand paint character
+// ── Circle outline ────────────────────────────────────────────────────
+const (
+	circleH     = '─' // horizontal segments
+	circleV     = '│' // vertical segments
+	circleDiag1 = '╱' // forward-slash diagonal
+	circleDiag2 = '╲' // back-slash diagonal
+)
+
+// ── Circle filled ─────────────────────────────────────────────────────
+const circleFill = '█'
+
+// ── Line ──────────────────────────────────────────────────────────────
+const (
+	lineH     = '─'
+	lineV     = '│'
+	lineDiag1 = '╱'
+	lineDiag2 = '╲'
+)
+
+// ── Freehand pixel ────────────────────────────────────────────────────
+//   Character stamped when using the Freehand (F) tool
 const freeChar = '█'
 
-// ═══════════════════════════════════════════════════════════════
-//  ENTRY POINT — no need to edit below
-// ═══════════════════════════════════════════════════════════════
+
+//
+// Example — uncomment to try:
+//
+	// func presetShapes(ctx *canvas.Context) {
+	//     ctx.StrokeColor = canvas.Cyan
+	//     ctx.StrokeRect(2, 2, 20, 10)       // outline box at x=2, y=2, w=20, h=10
+
+	//     ctx.FillColor = canvas.Yellow
+	//     ctx.FillCircle(50, 15, 8)           // filled circle at center (50,15) r=8
+
+	//     ctx.StrokeColor = canvas.Red
+	//     ctx.DrawLine(0, 0, 30, 15)          // diagonal line
+
+	//     ctx.StrokeColor = canvas.Green
+	//     ctx.DrawLine(10, 0, 10, 20)         // vertical line at x=10
+	// }
+
+func presetShapes(_ *canvas.Context) {
+	// empty by default — interactive drawing only
+	// replace _ with ctx and add your draw calls above
+}
 
 func main() {
 	tui.Run(tui.Config{
-		FullConsole:  fullConsole,
-		CanvasW:      canvasW,
-		CanvasH:      canvasH,
-		ShowRulers:   showRulers,
-		DefaultTool:  defaultTool,
-		DefaultFill:  defaultFill,
-		DefaultColor: defaultColor,
+		FullConsole:   fullConsole,
+		CanvasW:       canvasW,
+		CanvasH:       canvasH,
+		DefaultTool:   defaultTool,
+		DefaultFill:   defaultFill,
+		DefaultColor:  defaultColor,
+		PresetShapes:  presetShapes,
 		Chars: canvas.Chars{
 			RectTop: rectTop, RectBottom: rectBottom,
 			RectLeft: rectLeft, RectRight: rectRight,
@@ -91,5 +125,4 @@ func main() {
 	})
 }
 
-// keep models imported for AllColors
-var _ = models.AllColors
+var _ = models.AllColors // keep import
