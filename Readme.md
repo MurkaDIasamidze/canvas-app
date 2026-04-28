@@ -1,268 +1,343 @@
-# ASCII Canvas Studio
+# console-draw
 
-A terminal drawing application written in pure Go.
-Runs directly in **CMD**, **PowerShell**, **Linux** or **macOS** terminal.
-No browser. No external TUI library. Everything built from raw ANSI escape codes.
+A terminal drawing app written in pure Go — no external libraries, no framework, no database.  
+Draws directly to the console using ANSI escape codes and Unicode box-drawing characters.
+
+```
+┌──────────────────────────────────────────────┐
+│  ◯   ╱╲   ─────   ▭   ·····   FillText!    │
+└──────────────────────────────────────────────┘
+```
 
 ---
 
-## Quick Start
+## Files
 
-```powershell
-# 1. Copy env file and fill in your DB credentials
-copy .env.example .env
+| File | What it does |
+|---|---|
+| `config.go` | **All settings** — size, chars, default tool, preset shapes |
+| `canvas.go` | Drawing engine — JS-canvas-style API |
+| `shape.go` | In-memory shape list + renderer |
+| `main.go` | App loop, screens, keyboard input |
+| `term.go` | Shared ANSI codes, colors, buffered output |
+| `term_unix.go` | Unix raw mode + key reading (`stty`) |
+| `term_windows.go` | Windows raw mode + key reading (`kernel32.dll`) |
 
-# 2. Download Go dependencies
-go mod tidy
+---
 
-# 3. Run  (always use the dot — it compiles all files together)
+## Run
+
+```bash
 go run .
 ```
 
----
+Or build a binary:
 
-## Project Structure
-
-```
-canvas-tui/
-├── main.go                  ← entry point + ALL configuration (edit this)
-├── go.mod                   ← Go dependencies
-├── .env                     ← database credentials (copy from .env.example)
-├── db/
-│   └── db.go                ← PostgreSQL connection via GORM
-├── models/
-│   └── models.go            ← data types: Project, Shape, Color
-├── canvas/
-│   └── canvas.go            ← drawing engine (JS-canvas-style API)
-└── tui/
-    ├── app.go               ← all screens, input handling, render loop
-    ├── platform_windows.go  ← Windows: ANSI enable, UTF-8, ReadConsoleInputW
-    └── platform_unix.go     ← Linux/macOS: stty raw mode, stdin read
+```bash
+go build -o draw .
+./draw
 ```
 
----
-
-## Configuration
-
-Everything is at the **top of `main.go`** — no separate config file.
-
-```go
-// Canvas size
-const fullConsole = true   // true  → fills entire terminal window
-                           // false → use fixed canvasW / canvasH below
-const canvasW = 120
-const canvasH = 40
-
-// Starting tool: "rect"  "circle"  "line"  "free"
-const defaultTool = "rect"
-
-// Starting fill mode: false = outline,  true = filled
-const defaultFill = false
-
-// Starting color: "green" "cyan" "yellow" "red" "magenta" "blue" "white"
-const defaultColor = "green"
-
-// Characters used for drawing — change to anything you like
-const rectCornerTL = '┌'   // top-left corner of rectangle
-const rectTop      = '─'   // top edge
-const rectFill     = '█'   // filled rectangle
-const circleH      = '─'   // horizontal parts of circle
-const lineH        = '─'   // horizontal line
-const freeChar     = '█'   // freehand pixel dot
-// ... all other chars are also configurable
-```
-
----
-
-## Drawing Tools
-
-### Rectangle (`R`)
-Draws a rectangle between two points you place.
-
-- **Outline** — uses box-drawing characters:
-  ```
-  ┌────────────┐
-  │            │
-  └────────────┘
-  ```
-- **Filled** — fills the area with `█`
-
-### Circle (`C`)
-Draws a circle. First point = center, move cursor outward = radius.
-
-- **Outline** — characters chosen by tangent angle at each point:
-  ```
-       ────
-     ╱      ╲
-    │          │
-     ╲      ╱
-       ────
-  ```
-- **Filled** — fills with `█`
-
-### Line (`L`)
-Draws a straight line between two points.
-Character chosen automatically by slope:
-
-| Direction   | Character |
-|-------------|-----------|
-| Horizontal  | `─`       |
-| Vertical    | `│`       |
-| Diagonal `\`| `╲`       |
-| Diagonal `/`| `╱`       |
-
-### Freehand (`F`)
-A **pencil / pixel tool**. Each press of `Space` stamps one `█` cell at the cursor position. Move with arrow keys and press `Space` wherever you want to paint. Good for:
-- Drawing irregular shapes
-- Writing letters or patterns manually
-- Filling gaps between other shapes
+No `go get` needed — zero dependencies.
 
 ---
 
 ## Controls
 
-### Project List
-
 | Key | Action |
-|-----|--------|
-| `↑` `↓` | Navigate projects |
-| `Enter` | Open project |
-| `N` | New project |
-| `D` | Delete project |
+|---|---|
+| `↑ ↓ ← →` | Move cursor |
+| `Space` / `Enter` | **1st press** = set start point · **2nd press** = commit shape |
+| `Esc` | Cancel drawing in progress |
+| `M` | Open options menu (tool / fill / color) |
+| `U` | Undo last shape |
+| `X` | Clear all shapes |
+| `H` | Help screen |
 | `Q` | Quit |
 
-### Canvas
+**In the menu:**
 
 | Key | Action |
-|-----|--------|
-| `↑` `↓` `←` `→` | Move cursor |
-| `Space` | **1st press** = set start point · **2nd press** = draw shape |
-| `O` | Open options menu (tool / fill / color) |
-| `U` | Undo last shape |
-| `X` | Clear entire canvas |
-| `H` | Help screen |
-| `Q` | Back to project list |
-| `Esc` | Cancel current drawing |
-
-> Freehand mode: each `Space` press paints one dot at the cursor.
-
-### Options Menu (`O`)
-
-| Key | Action |
-|-----|--------|
-| `R` | Switch to Rectangle tool |
-| `C` | Switch to Circle tool |
-| `L` | Switch to Line tool |
-| `F` | Switch to Freehand tool |
-| `T` | Toggle outline / filled |
-| `←` `→` | Cycle through colors |
-| `Enter` | Back to canvas |
+|---|---|
+| `R` `C` `L` `F` | Switch tool (Rect / Circle / Line / Freehand) |
+| `T` | Toggle outline ↔ filled |
+| `← →` | Cycle color |
+| `Enter` / `Esc` | Back to canvas |
 
 ---
 
-## Drawing Workflow
+## Changing the canvas size
 
-```
-1. Open or create a project from the project list
-
-2. Press O → choose:
-   - Tool (R / C / L / F)
-   - Fill mode (T to toggle)
-   - Color (← →)
-   Press Enter to return to canvas
-
-3. Move cursor with arrow keys to your start position
-
-4. Press Space → start point is locked (shown in yellow)
-
-5. Move cursor to end position
-   → live preview of the shape follows your cursor
-
-6. Press Space again → shape is drawn and saved to DB
-
-7. Press U to undo,  X to clear everything
-```
-
----
-
-## Canvas API (`canvas/canvas.go`)
-
-The drawing engine uses a **JavaScript canvas–style API**.
-You can use it directly from Go code:
+Open **`config.go`** and edit the size section at the top:
 
 ```go
-// Create a canvas
-ctx := canvas.New(80, 40)
+// fullConsole = true  → fills your entire terminal window (recommended)
+// fullConsole = false → use the fixed width/height below
+const fullConsole = true
 
-// Set colors
-ctx.StrokeColor = canvas.Green
-ctx.FillColor   = canvas.Red
-
-// Draw shapes
-ctx.StrokeRect(5, 5, 30, 10)          // outline rectangle (x, y, width, height)
-ctx.FillRect(5, 5, 30, 10)            // filled rectangle
-
-ctx.StrokeCircle(40, 20, 8)           // outline circle (cx, cy, radius)
-ctx.FillCircle(40, 20, 8)             // filled circle
-
-ctx.DrawLine(0, 0, 79, 39)            // line from (x1,y1) to (x2,y2)
-
-ctx.SetPixel(10, 10)                  // single dot at (x, y)
-
-ctx.ClearRect(5, 5, 30, 10)           // erase a region
-ctx.Clear()                           // erase everything
-
-// Compositing
-ctx.DrawContext(other, ox, oy)        // draw one canvas onto another
-
-// Save / restore
-snap := ctx.Snapshot()                // copy current state
-ctx.Restore(snap)                     // put it back
+const (
+    canvasW = 120   // used only when fullConsole = false
+    canvasH = 40
+)
 ```
 
-Compared to JavaScript:
+**Full terminal (default):** `fullConsole = true` — the canvas always fills whatever terminal you have open. Resize your terminal to get more space.
 
-| JavaScript | Go (this project) |
-|---|---|
-| `ctx.strokeStyle = 'green'` | `ctx.StrokeColor = canvas.Green` |
-| `ctx.strokeRect(x, y, w, h)` | `ctx.StrokeRect(x, y, w, h)` |
-| `ctx.fillRect(x, y, w, h)` | `ctx.FillRect(x, y, w, h)` |
-| `ctx.clearRect(x, y, w, h)` | `ctx.ClearRect(x, y, w, h)` |
-| `ctx.arc(...); ctx.stroke()` | `ctx.StrokeCircle(cx, cy, r)` |
-| `ctx.arc(...); ctx.fill()` | `ctx.FillCircle(cx, cy, r)` |
-| `ctx.moveTo(); ctx.lineTo(); ctx.stroke()` | `ctx.DrawLine(x1, y1, x2, y2)` |
-| `ctx.fillRect(x, y, 1, 1)` | `ctx.SetPixel(x, y)` |
-| `ctx.drawImage(src, ox, oy)` | `ctx.DrawContext(src, ox, oy)` |
+**Fixed size:** Set `fullConsole = false` and pick any `canvasW` / `canvasH`. Useful if you want a predictable viewport or are embedding preset artwork.
 
 ---
 
-## Tech Stack
+## Changing the drawing characters
 
-| Layer | Technology |
-|---|---|
-| Language | Go 1.21 |
-| Database | PostgreSQL |
-| ORM | GORM |
-| Terminal colors | Raw ANSI escape codes |
-| Windows input | `ReadConsoleInputW` via `kernel32.dll` syscall |
-| Unix input | `stty raw` + `os.Stdin.Read` |
-| TUI library | None — built from scratch |
+Every character used for drawing is a constant in **`config.go`**.  
+Change any of them and rebuild — nothing else needs to touch.
+
+### Rectangle outline
+
+```go
+const (
+    rectTL  = '┌'  // top-left corner
+    rectTR  = '┐'  // top-right corner
+    rectBL  = '└'  // bottom-left corner
+    rectBR  = '┘'  // bottom-right corner
+    rectTop    = '─'  // top edge
+    rectBottom = '─'  // bottom edge
+    rectLeft   = '│'  // left edge
+    rectRight  = '│'  // right edge
+)
+```
+
+**ASCII fallback** (for terminals without Unicode):
+
+```go
+const (
+    rectTL = '+';  rectTR = '+';  rectBL = '+';  rectBR = '+'
+    rectTop = '-'; rectBottom = '-'
+    rectLeft = '|'; rectRight = '|'
+)
+```
+
+### Rectangle fill
+
+```go
+const rectFill = '█'   // try: '▓' '▒' '░' '#' '*' '@'
+```
+
+### Circle outline
+
+Characters are picked automatically by the tangent angle at each pixel:
+
+```go
+const (
+    circH  = '─'   // horizontal segments  (~0° / 180°)
+    circV  = '│'   // vertical segments    (~90°)
+    circD1 = '╱'   // forward diagonal     (~45°)
+    circD2 = '╲'   // back diagonal        (~135°)
+)
+```
+
+**ASCII fallback:**
+
+```go
+const (
+    circH = '-';  circV = '|';  circD1 = '/';  circD2 = '\\'
+)
+```
+
+### Circle fill
+
+```go
+const circFill = '█'   // try: 'O' '*' '@'
+```
+
+### Line
+
+```go
+const (
+    lineH  = '─'   // horizontal line
+    lineV  = '│'   // vertical line
+    lineD1 = '╱'   // diagonal /
+    lineD2 = '╲'   // diagonal \
+)
+```
+
+### Freehand pixel
+
+```go
+const freeChar = '█'   // try: '·' '•' '+' '*'
+```
 
 ---
 
-## Database Setup
+## Changing default tool, fill, and color
 
-```sql
--- PostgreSQL: the default 'postgres' database works fine
--- Just make sure the user and password match your .env
+Also in `config.go`:
+
+```go
+const defaultTool  = KindRect    // KindRect | KindCircle | KindLine | KindFree
+const defaultFill  = false       // false = outline   true = filled
+const defaultColor = ColGreen    // ColGreen | ColCyan | ColYellow | ColRed
+                                 // ColMagenta | ColBlue | ColWhite
 ```
 
-```env
-DB_HOST=localhost
-DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=root
-DB_NAME=postgres
+---
+
+## Drawing preset shapes at startup
+
+`config.go` includes a `presetShapes` function that runs once when the app starts.  
+Anything you draw here appears as a permanent background layer — it cannot be undone  
+or erased during the session, but interactive shapes draw on top of it normally.
+
+```go
+func presetShapes(c *Canvas) {
+    // box in the top-left
+    c.StrokeColor = ColCyan
+    c.StrokeRect(1, 1, 30, 10)
+
+    // filled circle in the center
+    c.FillColor = ColYellow
+    c.FillCircle(60, 20, 8)
+
+    // diagonal line
+    c.StrokeColor = ColRed
+    c.DrawLine(0, 0, 40, 20)
+
+    // text label
+    c.FillColor = ColWhite
+    c.FillText("hello!", 5, 5)
+
+    // path / polygon
+    c.StrokeColor = ColMagenta
+    c.BeginPath()
+    c.MoveTo(10, 1)
+    c.LineTo(20, 10)
+    c.LineTo(0, 10)
+    c.ClosePath()
+    c.Stroke()
+}
 ```
 
-All tables are created automatically on first run via GORM `AutoMigrate`.
+Leave the body empty (or `_ = c`) to start with a blank canvas.
+
+---
+
+## Canvas API reference
+
+The `Canvas` type in `canvas.go` mirrors the browser's `CanvasRenderingContext2D`.
+
+### Properties
+
+```go
+c.StrokeColor = ColCyan    // color for Stroke* methods, DrawLine, SetPixel
+c.FillColor   = ColYellow  // color for Fill* methods, FillText
+```
+
+### Rectangles
+
+```go
+c.StrokeRect(x, y, w, h)   // ┌──┐ outline box
+c.FillRect(x, y, w, h)     // solid filled box
+c.ClearRect(x, y, w, h)    // erase region (make blank)
+```
+
+### Circles
+
+```go
+c.StrokeCircle(cx, cy, r)   // outline circle — chars chosen by angle
+c.FillCircle(cx, cy, r)     // solid filled circle
+```
+
+### Ellipses
+
+```go
+c.StrokeEllipse(cx, cy, rx, ry)   // outline ellipse (horizontal r, vertical r)
+c.FillEllipse(cx, cy, rx, ry)     // solid filled ellipse
+```
+
+### Lines
+
+```go
+c.DrawLine(x1, y1, x2, y2)   // straight line — char chosen by slope
+```
+
+### Path API (like JS)
+
+```go
+c.BeginPath()          // reset path
+c.MoveTo(x, y)         // move pen without drawing
+c.LineTo(x, y)         // add segment
+c.ClosePath()          // connect last point back to first
+c.Stroke()             // render the path with StrokeColor
+```
+
+### Triangles
+
+```go
+c.StrokeTriangle(x1,y1, x2,y2, x3,y3)   // outline
+c.FillTriangle(x1,y1, x2,y2, x3,y3)     // solid (scanline fill)
+```
+
+### Text
+
+```go
+c.FillText("hello", x, y)    // plain text at position
+c.StrokeText("hi",  x, y)    // text inside a ┌─┐ border box
+```
+
+### Pixel
+
+```go
+c.SetPixel(x, y)   // single pixel using freeChar + StrokeColor
+```
+
+### Canvas operations
+
+```go
+c.Clear()                    // wipe everything blank
+snap := c.Save()             // deep-copy buffer (returns [][]Cell)
+c.Restore(snap)              // revert to snapshot
+c.DrawCanvas(other, ox, oy)  // composite another canvas on top at offset
+```
+
+---
+
+## Colors
+
+| Constant | Color |
+|---|---|
+| `ColGreen` | Bright green |
+| `ColCyan` | Bright cyan |
+| `ColYellow` | Bright yellow |
+| `ColRed` | Bright red |
+| `ColMagenta` | Bright magenta |
+| `ColBlue` | Bright blue |
+| `ColWhite` | Bright white |
+
+---
+
+## Quick example — custom ASCII art preset
+
+```go
+// config.go
+
+const fullConsole = false
+const canvasW = 80
+const canvasH = 24
+
+const (
+    rectTL = '+'; rectTR = '+'; rectBL = '+'; rectBR = '+'
+    rectTop = '-'; rectBottom = '-'
+    rectLeft = '|'; rectRight = '|'
+)
+const rectFill  = '#'
+const circFill  = 'O'
+const freeChar  = '*'
+
+func presetShapes(c *Canvas) {
+    c.StrokeColor = ColGreen
+    c.StrokeRect(0, 0, 80, 24)   // border around the whole canvas
+
+    c.FillColor = ColYellow
+    c.FillText("ASCII CANVAS", 33, 11)
+}
+```
