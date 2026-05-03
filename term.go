@@ -1,16 +1,12 @@
 package main
 
-// term.go — shared terminal types, ANSI escape codes, buffered output.
-// Platform-specific raw mode / input / size: term_unix.go & term_windows.go
-
 import (
 	"bufio"
 	"fmt"
 	"os"
 )
 
-// ── Color ─────────────────────────────────────────────────────
-
+// Color names used by strokeStyle / fillStyle
 type Color string
 
 const (
@@ -23,9 +19,7 @@ const (
 	ColWhite   Color = "white"
 )
 
-var allColors = []Color{
-	ColGreen, ColCyan, ColYellow, ColRed, ColMagenta, ColBlue, ColWhite,
-}
+var allColors = []Color{ColGreen, ColCyan, ColYellow, ColRed, ColMagenta, ColBlue, ColWhite}
 
 func colorANSI(c Color) string {
 	switch c {
@@ -40,10 +34,9 @@ func colorANSI(c Color) string {
 	return FgBrightGreen
 }
 
-// ky wraps a key hint in bright yellow for status bars.
 func ky(s string) string { return FgBrightYellow + s + Reset }
 
-// ── ANSI escape codes ─────────────────────────────────────────
+// ── ANSI codes ────────────────────────────────────────────────
 
 const (
 	Reset   = "\033[0m"
@@ -85,14 +78,14 @@ const (
 	KeySpace = 32
 )
 
-// ── Buffered stdout ───────────────────────────────────────────
+// ── Buffered output ───────────────────────────────────────────
 
 var stdout = bufio.NewWriterSize(os.Stdout, 1<<18)
 
 func flush()                     { stdout.Flush() }
-func moveTo(x, y int)            { fmt.Fprintf(stdout, "\033[%d;%dH", y, x) }
+func cursorTo(x, y int)          { fmt.Fprintf(stdout, "\033[%d;%dH", y, x) }
 func print_(s string)            { fmt.Fprint(stdout, s) }
-func printAt(x, y int, s string) { moveTo(x, y); fmt.Fprint(stdout, s) }
+func printAt(x, y int, s string) { cursorTo(x, y); fmt.Fprint(stdout, s) }
 func clearScreen()               { fmt.Fprint(stdout, "\033[2J\033[H") }
 func hideCursor()                { fmt.Fprint(stdout, "\033[?25l") }
 func showCursor()                { fmt.Fprint(stdout, "\033[?25h") }

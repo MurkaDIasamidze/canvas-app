@@ -189,31 +189,26 @@ Anything you draw here appears as a permanent background layer — it cannot be 
 or erased during the session, but interactive shapes draw on top of it normally.
 
 ```go
-func presetShapes(c *Canvas) {
-    // box in the top-left
-    c.StrokeColor = ColCyan
-    c.StrokeRect(1, 1, 30, 10)
+func presetShapes(ctx *Ctx) {
+    ctx.strokeStyle = ColCyan
+    strokeRect(ctx, 1, 1, 30, 10)
 
-    // filled circle in the center
-    c.FillColor = ColYellow
-    c.FillCircle(60, 20, 8)
+    ctx.fillStyle = ColYellow
+    fillCircle(ctx, 50, 15, 8)
 
-    // diagonal line
-    c.StrokeColor = ColRed
-    c.DrawLine(0, 0, 40, 20)
+    ctx.strokeStyle = ColRed
+    drawLine(ctx, 0, 0, 40, 20)
 
-    // text label
-    c.FillColor = ColWhite
-    c.FillText("hello!", 5, 5)
+    ctx.fillStyle = ColWhite
+    fillText(ctx, "hello!", 5, 5)
 
-    // path / polygon
-    c.StrokeColor = ColMagenta
-    c.BeginPath()
-    c.MoveTo(10, 1)
-    c.LineTo(20, 10)
-    c.LineTo(0, 10)
-    c.ClosePath()
-    c.Stroke()
+    ctx.strokeStyle = ColMagenta
+    beginPath(ctx)
+    moveTo(ctx, 10, 1)
+    lineTo(ctx, 20, 10)
+    lineTo(ctx, 0, 10)
+    closePath(ctx)
+    stroke(ctx)
 }
 ```
 
@@ -223,80 +218,90 @@ Leave the body empty (or `_ = c`) to start with a blank canvas.
 
 ## Canvas API reference
 
-The `Canvas` type in `canvas.go` mirrors the browser's `CanvasRenderingContext2D`.
+The API is modelled **exactly** on the browser's Canvas 2D context.
+Every drawing function takes `ctx` as its first argument — just like
+JavaScript helper functions that receive `ctx`.
 
-### Properties
+```
+JS:                                   Go:
+────────────────────────────────────  ──────────────────────────────────────────
+const canvas = document.createElement canvas := newCanvas(120, 40)
+const ctx = canvas.getContext("2d")   ctx    := getContext(canvas)
+```
+
+### Context style properties
 
 ```go
-c.StrokeColor = ColCyan    // color for Stroke* methods, DrawLine, SetPixel
-c.FillColor   = ColYellow  // color for Fill* methods, FillText
+ctx.strokeStyle = ColCyan     // JS: ctx.strokeStyle = "cyan"
+ctx.fillStyle   = ColYellow   // JS: ctx.fillStyle   = "yellow"
 ```
 
 ### Rectangles
 
 ```go
-c.StrokeRect(x, y, w, h)   // ┌──┐ outline box
-c.FillRect(x, y, w, h)     // solid filled box
-c.ClearRect(x, y, w, h)    // erase region (make blank)
+strokeRect(ctx, x, y, w, h)  // JS: ctx.strokeRect(x, y, w, h)   → ┌──┐ outline
+fillRect(ctx, x, y, w, h)    // JS: ctx.fillRect(x, y, w, h)     → solid █
+clearRect(ctx, x, y, w, h)   // JS: ctx.clearRect(x, y, w, h)    → erase region
 ```
 
 ### Circles
 
 ```go
-c.StrokeCircle(cx, cy, r)   // outline circle — chars chosen by angle
-c.FillCircle(cx, cy, r)     // solid filled circle
+strokeCircle(ctx, cx, cy, r) // JS: ctx.arc(...); ctx.stroke()   → ─ │ ╱ ╲ outline
+fillCircle(ctx, cx, cy, r)   // JS: ctx.arc(...); ctx.fill()     → solid █
 ```
 
 ### Ellipses
 
 ```go
-c.StrokeEllipse(cx, cy, rx, ry)   // outline ellipse (horizontal r, vertical r)
-c.FillEllipse(cx, cy, rx, ry)     // solid filled ellipse
+strokeEllipse(ctx, cx, cy, rx, ry)  // JS: ctx.ellipse(...); ctx.stroke()
+fillEllipse(ctx, cx, cy, rx, ry)    // JS: ctx.ellipse(...); ctx.fill()
 ```
 
 ### Lines
 
 ```go
-c.DrawLine(x1, y1, x2, y2)   // straight line — char chosen by slope
+drawLine(ctx, x1, y1, x2, y2)  // shorthand — slope picks ─ │ ╱ ╲ automatically
 ```
 
-### Path API (like JS)
+### Path API
 
 ```go
-c.BeginPath()          // reset path
-c.MoveTo(x, y)         // move pen without drawing
-c.LineTo(x, y)         // add segment
-c.ClosePath()          // connect last point back to first
-c.Stroke()             // render the path with StrokeColor
+beginPath(ctx)        // JS: ctx.beginPath()
+moveTo(ctx, x, y)     // JS: ctx.moveTo(x, y)
+lineTo(ctx, x, y)     // JS: ctx.lineTo(x, y)
+closePath(ctx)        // JS: ctx.closePath()
+stroke(ctx)           // JS: ctx.stroke()   — render path with strokeStyle
+fill(ctx)             // JS: ctx.fill()     — fill closed path with fillStyle
 ```
 
 ### Triangles
 
 ```go
-c.StrokeTriangle(x1,y1, x2,y2, x3,y3)   // outline
-c.FillTriangle(x1,y1, x2,y2, x3,y3)     // solid (scanline fill)
+strokeTriangle(ctx, x1,y1, x2,y2, x3,y3)  // outline
+fillTriangle(ctx, x1,y1, x2,y2, x3,y3)    // scanline fill
 ```
 
 ### Text
 
 ```go
-c.FillText("hello", x, y)    // plain text at position
-c.StrokeText("hi",  x, y)    // text inside a ┌─┐ border box
+fillText(ctx, "hello", x, y)   // JS: ctx.fillText("hello", x, y)
+strokeText(ctx, "hi",  x, y)   // draws text inside a ┌─┐ border box
 ```
 
 ### Pixel
 
 ```go
-c.SetPixel(x, y)   // single pixel using freeChar + StrokeColor
+setPixel(ctx, x, y)   // JS: ctx.fillRect(x, y, 1, 1)
 ```
 
 ### Canvas operations
 
 ```go
-c.Clear()                    // wipe everything blank
-snap := c.Save()             // deep-copy buffer (returns [][]Cell)
-c.Restore(snap)              // revert to snapshot
-c.DrawCanvas(other, ox, oy)  // composite another canvas on top at offset
+clearCanvas(ctx)                   // JS: ctx.clearRect(0,0,w,h)
+snap := saveCanvas(ctx)            // JS: ctx.save()   — pixel snapshot
+restoreCanvas(ctx, snap)           // JS: ctx.restore()
+drawCanvas(dstCtx, srcCtx, ox, oy) // JS: dstCtx.drawImage(srcCanvas, ox, oy)
 ```
 
 ---

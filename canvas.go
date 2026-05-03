@@ -1,171 +1,123 @@
 package main
 
-
 import "math"
 
-// ─────────────────────────────────────────────────────────────
-// Cell — one character position
-// ─────────────────────────────────────────────────────────────
-
-// Cell holds one rendered character on the canvas.
-type Cell struct {
-	Ch    rune
-	Color Color
-	Empty bool
-}
-
-// ─────────────────────────────────────────────────────────────
-// Canvas
-// ─────────────────────────────────────────────────────────────
-
-// Canvas is a 2D grid of Cells.
-// Set StrokeColor / FillColor before calling draw methods,
-// exactly like you set ctx.strokeStyle / ctx.fillStyle in JS.
+// Canvas is the pixel buffer. Create with newCanvas, draw via getContext.
 type Canvas struct {
-	// Width and Height of the canvas in character cells.
-	W, H int
-
-	// StrokeColor is used by all Stroke* methods and DrawLine / SetPixel.
-	StrokeColor Color
-
-	// FillColor is used by all Fill* methods and FillText.
-	FillColor Color
-
-	// internal cell buffer — rows first: cells[y][x]
-	cells [][]Cell
-
-	// path accumulator for BeginPath / MoveTo / LineTo / Stroke
-	pathX []int
-	pathY []int
+	width, height int
+	cells         [][]cell
 }
 
-// NewCanvas creates a blank canvas of size w×h.
-// Equivalent to document.createElement("canvas") + getContext("2d") in JS.
-func NewCanvas(w, h int) *Canvas {
-	c := &Canvas{
-		W:           w,
-		H:           h,
-		StrokeColor: ColGreen,
-		FillColor:   ColGreen,
-	}
+func newCanvas(w, h int) *Canvas {
+	c := &Canvas{width: w, height: h}
 	c.alloc()
 	return c
 }
 
 func (c *Canvas) alloc() {
-	c.cells = make([][]Cell, c.H)
+	c.cells = make([][]cell, c.height)
 	for y := range c.cells {
-		c.cells[y] = make([]Cell, c.W)
+		c.cells[y] = make([]cell, c.width)
 		for x := range c.cells[y] {
-			c.cells[y][x] = Cell{Ch: ' ', Empty: true}
+			c.cells[y][x] = cell{ch: ' ', empty: true}
 		}
 	}
 }
 
-// ─────────────────────────────────────────────────────────────
-// Low-level pixel access
-// ─────────────────────────────────────────────────────────────
+// Ctx is the drawing context. Get one with getContext(canvas).
+// Set strokeStyle / fillStyle before calling draw functions.
+type Ctx struct {
+	strokeStyle Color // used by stroke*, drawLine, setPixel
+	fillStyle   Color // used by fill*, fillText
+	canvas      *Canvas
+	pathX, pathY []int // accumulated by moveTo/lineTo, consumed by stroke/fill
+}
 
-// set writes one cell — bounds-checked, safe to call with out-of-range coords.
-func (c *Canvas) set(x, y int, ch rune, col Color) {
-	if x >= 0 && x < c.W && y >= 0 && y < c.H {
-		c.cells[y][x] = Cell{Ch: ch, Color: col}
+func getContext(c *Canvas) *Ctx {
+	return &Ctx{canvas: c, strokeStyle: ColGreen, fillStyle: ColGreen}
+}
+
+type cell struct {
+	ch    rune
+	color Color
+	empty bool
+}
+
+func (ctx *Ctx) set(x, y int, ch rune, col Color) {
+	c := ctx.canvas
+	if x >= 0 && x < c.width && y >= 0 && y < c.height {
+		c.cells[y][x] = cell{ch: ch, color: col}
 	}
 }
 
-// Get returns the cell at (x, y). Returns an empty cell if out of bounds.
-func (c *Canvas) Get(x, y int) Cell {
-	if x >= 0 && x < c.W && y >= 0 && y < c.H {
+func (ctx *Ctx) getCell(x, y int) cell {
+	c := ctx.canvas
+	if x >= 0 && x < c.width && y >= 0 && y < c.height {
 		return c.cells[y][x]
 	}
-	return Cell{Empty: true}
+	return cell{empty: true}
 }
 
-// SetPixel draws a single '█' at (x, y) using StrokeColor.
-// Equivalent to ctx.fillRect(x, y, 1, 1) in JS.
-func (c *Canvas) SetPixel(x, y int) {
-	c.set(x, y, freeChar, c.StrokeColor)
+// ── setPixel ─────────────────────────────────────────────────
+
+func setPixel(ctx *Ctx, x, y int) {
+	ctx.set(x, y, freeChar, ctx.strokeStyle)
 }
 
-// ─────────────────────────────────────────────────────────────
-// Rectangle  (JS: strokeRect / fillRect / clearRect)
-// ─────────────────────────────────────────────────────────────
+// ── strokeRect / fillRect / clearRect ────────────────────────
 
-// StrokeRect draws a rectangle outline using box-drawing characters.
-//
-//	┌──────────┐
-//	│          │
-//	└──────────┘
-//
-// Equivalent to ctx.strokeRect(x, y, width, height) in JS.
-func (c *Canvas) StrokeRect(x, y, w, h int) {
+func strokeRect(ctx *Ctx, x, y, w, h int) {
 	if w <= 0 || h <= 0 { return }
 	x2, y2 := x+w-1, y+h-1
-	col := c.StrokeColor
-
+	col := ctx.strokeStyle
 	if h == 1 {
-		// degenerate: single row
-		for i := x; i <= x2; i++ { c.set(i, y, rectTop, col) }
+		for i := x; i <= x2; i++ { ctx.set(i, y, rectTop, col) }
 		return
 	}
 	if w == 1 {
-		// degenerate: single column
-		for j := y; j <= y2; j++ { c.set(x, j, rectLeft, col) }
+		for j := y; j <= y2; j++ { ctx.set(x, j, rectLeft, col) }
 		return
 	}
-
-	// top & bottom edges
 	for i := x + 1; i < x2; i++ {
-		c.set(i, y,  rectTop, col)
-		c.set(i, y2, rectBottom, col)
+		ctx.set(i, y,  rectTop,    col)
+		ctx.set(i, y2, rectBottom, col)
 	}
-	// left & right edges
 	for j := y + 1; j < y2; j++ {
-		c.set(x,  j, rectLeft, col)
-		c.set(x2, j, rectRight, col)
+		ctx.set(x,  j, rectLeft,  col)
+		ctx.set(x2, j, rectRight, col)
 	}
-	// corners
-	c.set(x,  y,  rectTL, col)
-	c.set(x2, y,  rectTR, col)
-	c.set(x,  y2, rectBL, col)
-	c.set(x2, y2, rectBR, col)
+	ctx.set(x,  y,  rectTL, col)
+	ctx.set(x2, y,  rectTR, col)
+	ctx.set(x,  y2, rectBL, col)
+	ctx.set(x2, y2, rectBR, col)
 }
 
-// FillRect fills a rectangle with solid '█' blocks using FillColor.
-// Equivalent to ctx.fillRect(x, y, width, height) in JS.
-func (c *Canvas) FillRect(x, y, w, h int) {
+func fillRect(ctx *Ctx, x, y, w, h int) {
 	if w <= 0 || h <= 0 { return }
-	col := c.FillColor
+	col := ctx.fillStyle
 	for j := y; j < y+h; j++ {
 		for i := x; i < x+w; i++ {
-			c.set(i, j, rectFill, col)
+			ctx.set(i, j, rectFill, col)
 		}
 	}
 }
 
-// ClearRect erases a rectangular region, leaving it blank.
-// Equivalent to ctx.clearRect(x, y, width, height) in JS.
-func (c *Canvas) ClearRect(x, y, w, h int) {
+func clearRect(ctx *Ctx, x, y, w, h int) {
+	c := ctx.canvas
 	for j := y; j < y+h; j++ {
 		for i := x; i < x+w; i++ {
-			if i >= 0 && i < c.W && j >= 0 && j < c.H {
-				c.cells[j][i] = Cell{Ch: ' ', Empty: true}
+			if i >= 0 && i < c.width && j >= 0 && j < c.height {
+				c.cells[j][i] = cell{ch: ' ', empty: true}
 			}
 		}
 	}
 }
 
-// ─────────────────────────────────────────────────────────────
-// Circle  (terminal extension — no direct JS equivalent)
-// ─────────────────────────────────────────────────────────────
+// ── strokeCircle / fillCircle ─────────────────────────────────
 
-// StrokeCircle draws a circle outline centered at (cx, cy) with the given radius.
-// Characters are chosen by tangent angle: ─ │ ╱ ╲
-// The x-axis is doubled internally to compensate for terminal character aspect ratio.
-func (c *Canvas) StrokeCircle(cx, cy, radius int) {
-	if radius <= 0 { c.SetPixel(cx, cy); return }
-	col := c.StrokeColor
-
+func strokeCircle(ctx *Ctx, cx, cy, radius int) {
+	if radius <= 0 { setPixel(ctx, cx, cy); return }
+	col := ctx.strokeStyle
 	plot := func(px, py, ox, oy int) {
 		tx  := float64(-oy)
 		ty  := float64(ox) * 0.5
@@ -178,10 +130,8 @@ func (c *Canvas) StrokeCircle(cx, cy, radius int) {
 		case ang < 112.5:                ch = circV
 		default:                         ch = circD2
 		}
-		c.set(px, py, ch, col)
+		ctx.set(px, py, ch, col)
 	}
-
-	// Bresenham midpoint — x*2 corrects for terminal aspect ratio
 	x, y := 0, radius
 	d := 1 - radius
 	for x <= y {
@@ -194,75 +144,61 @@ func (c *Canvas) StrokeCircle(cx, cy, radius int) {
 	}
 }
 
-// FillCircle draws a filled solid circle centered at (cx, cy).
-func (c *Canvas) FillCircle(cx, cy, radius int) {
-	if radius <= 0 { c.set(cx, cy, circFill, c.FillColor); return }
-	rf  := float64(radius)
-	col := c.FillColor
+func fillCircle(ctx *Ctx, cx, cy, radius int) {
+	if radius <= 0 { ctx.set(cx, cy, circFill, ctx.fillStyle); return }
+	rf, col := float64(radius), ctx.fillStyle
 	for y := cy - radius; y <= cy+radius; y++ {
 		for x := cx - radius*2; x <= cx+radius*2; x++ {
 			dx := float64(x-cx) * 0.5
 			dy := float64(y - cy)
 			if math.Sqrt(dx*dx+dy*dy) <= rf+0.3 {
-				c.set(x, y, circFill, col)
+				ctx.set(x, y, circFill, col)
 			}
 		}
 	}
 }
 
-// ─────────────────────────────────────────────────────────────
-// Ellipse  (JS: ellipse — but terminal version takes rx, ry)
-// ─────────────────────────────────────────────────────────────
+// ── strokeEllipse / fillEllipse ───────────────────────────────
 
-// StrokeEllipse draws an ellipse outline centered at (cx, cy)
-// with horizontal radius rx and vertical radius ry.
-// Equivalent to ctx.ellipse(cx, cy, rx, ry, 0, 0, 2*Math.PI); ctx.stroke()
-func (c *Canvas) StrokeEllipse(cx, cy, rx, ry int) {
-	if rx <= 0 || ry <= 0 { c.SetPixel(cx, cy); return }
-	col := c.StrokeColor
-	// parametric walk around the ellipse at fine angular steps
+func strokeEllipse(ctx *Ctx, cx, cy, rx, ry int) {
+	if rx <= 0 || ry <= 0 { setPixel(ctx, cx, cy); return }
+	col   := ctx.strokeStyle
 	steps := (rx + ry) * 8
-	prev := false
+	prev  := false
 	var px0, py0 int
 	for i := 0; i <= steps; i++ {
-		t   := 2 * math.Pi * float64(i) / float64(steps)
-		px  := cx + int(math.Round(float64(rx)*math.Cos(t)))
-		py  := cy + int(math.Round(float64(ry)*math.Sin(t)))
-		if prev { c.lineRaw(px0, py0, px, py, col) }
+		t  := 2 * math.Pi * float64(i) / float64(steps)
+		px := cx + int(math.Round(float64(rx)*math.Cos(t)))
+		py := cy + int(math.Round(float64(ry)*math.Sin(t)))
+		if prev { bresenham(ctx, px0, py0, px, py, col) }
 		px0, py0 = px, py
 		prev = true
 	}
 }
 
-// FillEllipse draws a filled solid ellipse centered at (cx, cy).
-func (c *Canvas) FillEllipse(cx, cy, rx, ry int) {
-	if rx <= 0 || ry <= 0 { c.set(cx, cy, '█', c.FillColor); return }
-	col := c.FillColor
+func fillEllipse(ctx *Ctx, cx, cy, rx, ry int) {
+	if rx <= 0 || ry <= 0 { ctx.set(cx, cy, rectFill, ctx.fillStyle); return }
+	col      := ctx.fillStyle
 	rxf, ryf := float64(rx), float64(ry)
 	for y := cy - ry; y <= cy+ry; y++ {
 		for x := cx - rx*2; x <= cx+rx*2; x++ {
 			dx := float64(x-cx) * 0.5
 			dy := float64(y - cy)
 			if (dx*dx)/(rxf*rxf)+(dy*dy)/(ryf*ryf) <= 1.0 {
-				c.set(x, y, '█', col)
+				ctx.set(x, y, rectFill, col)
 			}
 		}
 	}
 }
 
-// ─────────────────────────────────────────────────────────────
-// Line  (JS: moveTo / lineTo / stroke  +  shorthand DrawLine)
-// ─────────────────────────────────────────────────────────────
+// ── drawLine ─────────────────────────────────────────────────
 
-// DrawLine draws a straight line from (x1, y1) to (x2, y2) using StrokeColor.
-// Character is chosen by the line's slope: ─ │ ╱ ╲
-// Shorthand for BeginPath / MoveTo / LineTo / Stroke in one call.
-func (c *Canvas) DrawLine(x1, y1, x2, y2 int) {
-	c.bresenham(x1, y1, x2, y2, c.StrokeColor)
+// drawLine draws from (x1,y1) to (x2,y2). Slope picks char: ─ │ ╱ ╲
+func drawLine(ctx *Ctx, x1, y1, x2, y2 int) {
+	bresenham(ctx, x1, y1, x2, y2, ctx.strokeStyle)
 }
 
-// bresenham walks a line and stamps the slope-appropriate character.
-func (c *Canvas) bresenham(x1, y1, x2, y2 int, col Color) {
+func bresenham(ctx *Ctx, x1, y1, x2, y2 int, col Color) {
 	dx, dy   := x2-x1, y2-y1
 	adx, ady := iabs(dx), iabs(dy)
 	var ch rune
@@ -276,7 +212,7 @@ func (c *Canvas) bresenham(x1, y1, x2, y2 int, col Color) {
 	err := adx - ady
 	x, y := x1, y1
 	for {
-		c.set(x, y, ch, col)
+		ctx.set(x, y, ch, col)
 		if x == x2 && y == y2 { break }
 		e2 := 2 * err
 		if e2 > -ady { err -= ady; x += sx }
@@ -284,172 +220,152 @@ func (c *Canvas) bresenham(x1, y1, x2, y2 int, col Color) {
 	}
 }
 
-// lineRaw is like bresenham but picks '·' for diagonals (used inside ellipse).
-func (c *Canvas) lineRaw(x1, y1, x2, y2 int, col Color) {
-	c.bresenham(x1, y1, x2, y2, col)
+// ── Path API: beginPath / moveTo / lineTo / closePath / stroke / fill ─
+
+func beginPath(ctx *Ctx) {
+	ctx.pathX = ctx.pathX[:0]
+	ctx.pathY = ctx.pathY[:0]
 }
 
-// ── Path API (JS-style) ───────────────────────────────────────
-
-// BeginPath resets the current path, discarding any previous MoveTo / LineTo calls.
-// Equivalent to ctx.beginPath() in JS.
-func (c *Canvas) BeginPath() {
-	c.pathX = c.pathX[:0]
-	c.pathY = c.pathY[:0]
+func moveTo(ctx *Ctx, x, y int) {
+	ctx.pathX = append(ctx.pathX, x)
+	ctx.pathY = append(ctx.pathY, y)
 }
 
-// MoveTo moves the "pen" to (x, y) without drawing anything.
-// Equivalent to ctx.moveTo(x, y) in JS.
-func (c *Canvas) MoveTo(x, y int) {
-	c.pathX = append(c.pathX, x)
-	c.pathY = append(c.pathY, y)
+func lineTo(ctx *Ctx, x, y int) {
+	ctx.pathX = append(ctx.pathX, x)
+	ctx.pathY = append(ctx.pathY, y)
 }
 
-// LineTo adds a straight line from the last point to (x, y).
-// Equivalent to ctx.lineTo(x, y) in JS.
-func (c *Canvas) LineTo(x, y int) {
-	c.pathX = append(c.pathX, x)
-	c.pathY = append(c.pathY, y)
+func closePath(ctx *Ctx) {
+	if len(ctx.pathX) < 2 { return }
+	ctx.pathX = append(ctx.pathX, ctx.pathX[0])
+	ctx.pathY = append(ctx.pathY, ctx.pathY[0])
 }
 
-// Stroke draws all lines in the current path using StrokeColor.
-// Equivalent to ctx.stroke() in JS.
-func (c *Canvas) Stroke() {
-	if len(c.pathX) < 2 { return }
-	for i := 1; i < len(c.pathX); i++ {
-		c.bresenham(c.pathX[i-1], c.pathY[i-1], c.pathX[i], c.pathY[i], c.StrokeColor)
+func stroke(ctx *Ctx) {
+	for i := 1; i < len(ctx.pathX); i++ {
+		bresenham(ctx, ctx.pathX[i-1], ctx.pathY[i-1], ctx.pathX[i], ctx.pathY[i], ctx.strokeStyle)
 	}
 }
 
-// ClosePath adds a line from the last point back to the first point.
-// Equivalent to ctx.closePath() in JS.
-func (c *Canvas) ClosePath() {
-	if len(c.pathX) < 2 { return }
-	c.pathX = append(c.pathX, c.pathX[0])
-	c.pathY = append(c.pathY, c.pathY[0])
+// fill fills the closed polygon defined by the current path.
+func fill(ctx *Ctx) {
+	n := len(ctx.pathX)
+	if n < 3 { return }
+	col := ctx.fillStyle
+	minY, maxY := ctx.pathY[0], ctx.pathY[0]
+	for _, y := range ctx.pathY {
+		if y < minY { minY = y }
+		if y > maxY { maxY = y }
+	}
+	for y := minY; y <= maxY; y++ {
+		var xs []int
+		for i := 0; i < n; i++ {
+			x1, y1 := ctx.pathX[i], ctx.pathY[i]
+			x2, y2 := ctx.pathX[(i+1)%n], ctx.pathY[(i+1)%n]
+			if (y1 <= y && y < y2) || (y2 <= y && y < y1) {
+				xs = append(xs, x1+(x2-x1)*(y-y1)/(y2-y1))
+			}
+		}
+		for i := 0; i < len(xs)-1; i++ { // sort
+			for j := i + 1; j < len(xs); j++ {
+				if xs[i] > xs[j] { xs[i], xs[j] = xs[j], xs[i] }
+			}
+		}
+		for i := 0; i+1 < len(xs); i += 2 {
+			for x := xs[i]; x <= xs[i+1]; x++ { ctx.set(x, y, rectFill, col) }
+		}
+	}
 }
 
-// ─────────────────────────────────────────────────────────────
-// Triangle  (terminal extension)
-// ─────────────────────────────────────────────────────────────
+// ── strokeTriangle / fillTriangle ────────────────────────────
 
-// StrokeTriangle draws a triangle outline through three points.
-func (c *Canvas) StrokeTriangle(x1, y1, x2, y2, x3, y3 int) {
-	col := c.StrokeColor
-	c.bresenham(x1, y1, x2, y2, col)
-	c.bresenham(x2, y2, x3, y3, col)
-	c.bresenham(x3, y3, x1, y1, col)
+func strokeTriangle(ctx *Ctx, x1, y1, x2, y2, x3, y3 int) {
+	col := ctx.strokeStyle
+	bresenham(ctx, x1, y1, x2, y2, col)
+	bresenham(ctx, x2, y2, x3, y3, col)
+	bresenham(ctx, x3, y3, x1, y1, col)
 }
 
-// FillTriangle draws a solid filled triangle through three points.
-// Uses scanline rasterisation.
-func (c *Canvas) FillTriangle(x1, y1, x2, y2, x3, y3 int) {
-	col := c.FillColor
-	// sort vertices by Y
+func fillTriangle(ctx *Ctx, x1, y1, x2, y2, x3, y3 int) {
+	col := ctx.fillStyle
 	if y1 > y2 { x1, y1, x2, y2 = x2, y2, x1, y1 }
 	if y1 > y3 { x1, y1, x3, y3 = x3, y3, x1, y1 }
 	if y2 > y3 { x2, y2, x3, y3 = x3, y3, x2, y2 }
-
 	lerp := func(ya, yb, xa, xb, y int) int {
 		if ya == yb { return xa }
 		return xa + (xb-xa)*(y-ya)/(yb-ya)
 	}
 	for y := y1; y <= y3; y++ {
-		var lx, rx int
-		lx = lerp(y1, y3, x1, x3, y)
-		if y < y2 {
-			rx = lerp(y1, y2, x1, x2, y)
-		} else {
-			rx = lerp(y2, y3, x2, x3, y)
-		}
+		lx := lerp(y1, y3, x1, x3, y)
+		var rx int
+		if y < y2 { rx = lerp(y1, y2, x1, x2, y) } else { rx = lerp(y2, y3, x2, x3, y) }
 		if lx > rx { lx, rx = rx, lx }
-		for x := lx; x <= rx; x++ { c.set(x, y, '█', col) }
+		for x := lx; x <= rx; x++ { ctx.set(x, y, rectFill, col) }
 	}
 }
 
-// ─────────────────────────────────────────────────────────────
-// Text  (JS: fillText / strokeText)
-// ─────────────────────────────────────────────────────────────
+// ── fillText / strokeText ─────────────────────────────────────
 
-// FillText draws the string s starting at (x, y) using FillColor.
-// Each character in s occupies exactly one cell.
-// Equivalent to ctx.fillText(text, x, y) in JS.
-func (c *Canvas) FillText(s string, x, y int) {
-	col := c.FillColor
+func fillText(ctx *Ctx, s string, x, y int) {
+	col := ctx.fillStyle
 	for i, ch := range s {
-		c.set(x+i, y, ch, col)
+		ctx.set(x+i, y, ch, col)
 	}
 }
 
-// StrokeText draws the string s inside a thin box border starting at (x, y).
-// The text is drawn with StrokeColor; the border uses the same color.
-// Roughly equivalent to ctx.strokeText(text, x, y) in JS
-// (terminal adaptation — stroked text isn't a native concept in terminals).
-func (c *Canvas) StrokeText(s string, x, y int) {
-	col  := c.StrokeColor
+// strokeText draws text inside a box border:  ┌───────┐ │ text │ └───────┘
+func strokeText(ctx *Ctx, s string, x, y int) {
+	col   := ctx.strokeStyle
 	runes := []rune(s)
-	w    := len(runes) + 2  // +2 for left/right border
-	// top border
-	c.set(x, y, '┌', col)
-	for i := 0; i < len(runes); i++ { c.set(x+1+i, y, '─', col) }
-	c.set(x+w-1, y, '┐', col)
-	// text row
-	c.set(x, y+1, '│', col)
-	for i, ch := range runes { c.set(x+1+i, y+1, ch, col) }
-	c.set(x+w-1, y+1, '│', col)
-	// bottom border
-	c.set(x, y+2, '└', col)
-	for i := 0; i < len(runes); i++ { c.set(x+1+i, y+2, '─', col) }
-	c.set(x+w-1, y+2, '┘', col)
+	w     := len(runes) + 2
+	ctx.set(x, y, rectTL, col)
+	for i := 0; i < len(runes); i++ { ctx.set(x+1+i, y, rectTop, col) }
+	ctx.set(x+w-1, y, rectTR, col)
+	ctx.set(x, y+1, rectLeft, col)
+	for i, ch := range runes { ctx.set(x+1+i, y+1, ch, col) }
+	ctx.set(x+w-1, y+1, rectRight, col)
+	ctx.set(x, y+2, rectBL, col)
+	for i := 0; i < len(runes); i++ { ctx.set(x+1+i, y+2, rectBottom, col) }
+	ctx.set(x+w-1, y+2, rectBR, col)
 }
 
-// ─────────────────────────────────────────────────────────────
-// Canvas-level operations  (JS: save / restore / clearRect on whole canvas)
-// ─────────────────────────────────────────────────────────────
+// ── Canvas-level ops ─────────────────────────────────────────
 
-// Clear wipes the entire canvas to blank cells.
-// Equivalent to ctx.clearRect(0, 0, canvas.width, canvas.height) in JS.
-func (c *Canvas) Clear() { c.alloc() }
-
-// Save returns a deep copy of the current cell buffer.
-// Equivalent to ctx.save() in JS (but we store pixels, not state stack).
-func (c *Canvas) Save() [][]Cell {
-	snap := make([][]Cell, c.H)
+func clearCanvas(ctx *Ctx)              { ctx.canvas.alloc() }
+func saveCanvas(ctx *Ctx) [][]cell      {
+	c := ctx.canvas
+	snap := make([][]cell, c.height)
 	for i := range snap {
-		snap[i] = make([]Cell, c.W)
+		snap[i] = make([]cell, c.width)
 		copy(snap[i], c.cells[i])
 	}
 	return snap
 }
-
-// Restore replaces the cell buffer with a previously saved snapshot.
-// Equivalent to ctx.restore() in JS.
-func (c *Canvas) Restore(snap [][]Cell) {
+func restoreCanvas(ctx *Ctx, snap [][]cell) {
+	c := ctx.canvas
 	for i := range snap {
-		if i < c.H { copy(c.cells[i], snap[i]) }
+		if i < c.height { copy(c.cells[i], snap[i]) }
 	}
 }
 
-// DrawCanvas composites another Canvas on top of this one at offset (ox, oy).
-// Only non-empty cells from src overwrite cells in dst.
-// Equivalent to ctx.drawImage(canvas, ox, oy) in JS.
-func (c *Canvas) DrawCanvas(src *Canvas, ox, oy int) {
-	for y := 0; y < src.H; y++ {
-		for x := 0; x < src.W; x++ {
-			cell := src.cells[y][x]
-			if !cell.Empty { c.set(x+ox, y+oy, cell.Ch, cell.Color) }
+// drawCanvas composites src onto dst at offset (ox, oy). Non-empty cells overwrite.
+func drawCanvas(dst *Ctx, src *Ctx, ox, oy int) {
+	sc := src.canvas
+	for y := 0; y < sc.height; y++ {
+		for x := 0; x < sc.width; x++ {
+			cl := sc.cells[y][x]
+			if !cl.empty { dst.set(x+ox, y+oy, cl.ch, cl.color) }
 		}
 	}
 }
 
-// ─────────────────────────────────────────────────────────────
-// Math helpers
-// ─────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────
 
 func iabs(x int) int    { if x < 0 { return -x }; return x }
 func isign(x int) int   { if x < 0 { return -1 } else if x > 0 { return 1 }; return 0 }
 func imin(a, b int) int { if a < b { return a }; return b }
-func imax(a, b int) int { if a > b { return a }; return b }
 
 func isqrt(x float64) float64 {
 	if x <= 0 { return 0 }

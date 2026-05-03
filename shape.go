@@ -1,6 +1,5 @@
 package main
 
-// ShapeKind identifies the type of a drawn shape.
 type ShapeKind string
 
 const (
@@ -10,39 +9,29 @@ const (
 	KindFree   ShapeKind = "free"
 )
 
-// Shape is a fully described drawing command stored in memory.
-// All drawn shapes are kept in a slice; undo just pops the last one.
 type Shape struct {
-	Kind           ShapeKind
+	Kind            ShapeKind
 	X1, Y1, X2, Y2 int
-	Radius         int
-	Filled         bool
-	Color          Color
+	Radius          int
+	Filled          bool
+	Color           Color
 }
 
-// renderShapes draws every shape from the list onto canvas c.
-func renderShapes(c *Canvas, shapes []Shape) {
+func renderShapes(ctx *Ctx, shapes []Shape) {
 	for _, s := range shapes {
-		drawShape(c, s)
-	}
-}
-
-// drawShape draws one Shape onto canvas c.
-func drawShape(c *Canvas, s Shape) {
-	c.StrokeColor = s.Color
-	c.FillColor   = s.Color
-	switch s.Kind {
-	case KindRect:
-		x := imin(s.X1, s.X2)
-		y := imin(s.Y1, s.Y2)
-		w := iabs(s.X2-s.X1) + 1
-		h := iabs(s.Y2-s.Y1) + 1
-		if s.Filled { c.FillRect(x, y, w, h) } else { c.StrokeRect(x, y, w, h) }
-	case KindCircle:
-		if s.Filled { c.FillCircle(s.X1, s.Y1, s.Radius) } else { c.StrokeCircle(s.X1, s.Y1, s.Radius) }
-	case KindLine:
-		c.DrawLine(s.X1, s.Y1, s.X2, s.Y2)
-	case KindFree:
-		c.set(s.X1, s.Y1, '█', s.Color)
+		ctx.strokeStyle = s.Color
+		ctx.fillStyle   = s.Color
+		switch s.Kind {
+		case KindRect:
+			x, y := imin(s.X1, s.X2), imin(s.Y1, s.Y2)
+			w, h := iabs(s.X2-s.X1)+1, iabs(s.Y2-s.Y1)+1
+			if s.Filled { fillRect(ctx, x, y, w, h) } else { strokeRect(ctx, x, y, w, h) }
+		case KindCircle:
+			if s.Filled { fillCircle(ctx, s.X1, s.Y1, s.Radius) } else { strokeCircle(ctx, s.X1, s.Y1, s.Radius) }
+		case KindLine:
+			drawLine(ctx, s.X1, s.Y1, s.X2, s.Y2)
+		case KindFree:
+			ctx.set(s.X1, s.Y1, freeChar, s.Color)
+		}
 	}
 }
